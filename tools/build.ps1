@@ -47,6 +47,8 @@ function Get-RegistryQueryMatches {
         try {
             $output = @(& reg.exe @arguments 2>&1)
             $exitCode = $LASTEXITCODE
+            # Exit 1 means no matching registry state and is handled below.
+            $global:LASTEXITCODE = 0
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
