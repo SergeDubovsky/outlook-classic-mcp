@@ -137,6 +137,8 @@ if (-not (Test-Path -LiteralPath $script:msbuild -PathType Leaf)) {
     throw "MSBuild was not found at $script:msbuild"
 }
 
+& (Join-Path $PSScriptRoot 'verify-vsto-runtime.ps1') | Out-Null
+
 $outlookProcesses = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue | Select-Object Id, StartTime)
 if ($outlookProcesses.Count -gt 0) {
     throw "Outlook is running. Save open work and close Outlook gracefully before this VSTO build; never terminate it forcibly. Running process IDs: $($outlookProcesses.Id -join ', ')"

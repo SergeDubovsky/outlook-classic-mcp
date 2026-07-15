@@ -30,6 +30,7 @@ There is no service, background broker, Graph, EWS, IMAP, or connector fallback.
 
 - Windows x64 with Classic Outlook x64
 - Visual Studio 2026 with Microsoft 365 development and .NET desktop development
+- VSTO 4 runtime 10.0.60910 or newer
 - .NET Framework 4.8 SDK and targeting pack
 - .NET 10 SDK for the modern Core test target
 

@@ -69,6 +69,59 @@ jobs:
             throw 'Visual Studio still lacks the required Office/VSTO components after installation.'
           }
 
+      - name: Ensure VSTO runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $needsInstall = $false
+
+          try {
+            .\tools\verify-vsto-runtime.ps1 | Out-Null
+          }
+          catch {
+            $needsInstall = $true
+            Write-Host "VSTO runtime prerequisite is missing: $($_.Exception.Message)"
+          }
+
+          if ($needsInstall) {
+            # Microsoft Download Center package 105890, version 10.0.60917.00.
+            $uri = 'https://download.microsoft.com/download/5/d/2/5d24f8f8-efbb-4b63-aa33-3785e3104713/vstor_redist.exe'
+            $expectedSha256 = 'CFE1A40BBE4A50022DB2164ABDB0154984E2CECB761A23CDC81CB5754F6E0A18'
+            $installer = Join-Path $env:RUNNER_TEMP 'vstor_redist-10.0.60917.exe'
+
+            try {
+              Invoke-WebRequest -Uri $uri -OutFile $installer
+
+              $actualSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+              if ($actualSha256 -ne $expectedSha256) {
+                throw "Unexpected VSTO installer SHA-256: $actualSha256"
+              }
+
+              $signature = Get-AuthenticodeSignature -LiteralPath $installer
+              if (
+                $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                $signature.SignerCertificate.Subject -ne
+                  'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+              ) {
+                throw 'The VSTO installer does not have the expected valid Microsoft signature.'
+              }
+
+              $process = Start-Process `
+                -FilePath $installer `
+                -ArgumentList @('/q', '/norestart') `
+                -Wait `
+                -PassThru
+              if ($process.ExitCode -notin @(0, 3010)) {
+                throw "VSTO runtime installation failed with exit code $($process.ExitCode)."
+              }
+            }
+            finally {
+              Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          .\tools\verify-vsto-runtime.ps1 | Format-List
+
       - name: Build, sign manifests, and test
         shell: pwsh
         run: .\tools\build.ps1 -Configuration Release

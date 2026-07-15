@@ -88,9 +88,12 @@ if ($officePlatform -ne 'x64') {
     $failures.Add("Classic Outlook x64 is required; detected platform: $officePlatform")
 }
 
-$vstoRuntime = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VSTO Runtime Setup\v4R' -ErrorAction SilentlyContinue
-if ($null -eq $vstoRuntime -or $vstoRuntime.VSTORFeature_CLR40 -ne 1) {
-    $failures.Add('The VSTO 4 runtime is not registered as installed.')
+$vstoRuntimeEvidence = $null
+try {
+    $vstoRuntimeEvidence = & (Join-Path $PSScriptRoot 'verify-vsto-runtime.ps1')
+}
+catch {
+    $failures.Add($_.Exception.Message)
 }
 
 $dotnetSdks = @()
@@ -240,7 +243,9 @@ $result = [pscustomobject]@{
     Net48ReferenceAssemblies = Test-Path -LiteralPath $net48ReferencePath
     DotNetSdks = $dotnetSdks
     ResolvedDotNetSdk = $resolvedDotNetSdk
-    VstoRuntimeVersion = if ($null -eq $vstoRuntime) { $null } else { $vstoRuntime.Version }
+    VstoRuntimeVersion = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.Version }
+    VstoRuntimeAssembly = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.AssemblyPath }
+    VstoRuntimeAssemblyIdentity = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.AssemblyIdentity }
     OutlookPath = $outlookPath
     OutlookVersion = $outlookVersion
     OutlookPlatform = $officePlatform
