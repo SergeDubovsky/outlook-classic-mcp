@@ -61,6 +61,8 @@ Automated test results:
 
 The tests prove the Phase 0 tool catalog is empty, the Core and Transport assemblies have no Office/VSTO references, and the real exact-prefix listener starts and releases its namespace.
 
+Public Windows CI run [29451627206](https://github.com/SergeDubovsky/outlook-classic-mcp/actions/runs/29451627206) completed successfully. The hosted runner verified its Visual Studio Office/VSTO components and Office 15 PIA assembly identities, installed and verified the pinned Microsoft VSTO runtime 10.0.60917 redistributable, built the signed Release solution with locked restore, passed all 12 tests, and passed the generated-file, dependency-license, and deterministic-repository checks.
+
 ## Codex configuration gate
 
 Codex CLI 0.144.4 strictly parses the committed repository configuration, including the bearer-token environment variable, default write approvals, and per-tool prompt settings. `tools/configure-codex.ps1` treats that reviewed project file as immutable, rejects a same-name global registration, proves the server appears only from this trusted checkout, and manages only the current-user token. It does not rewrite TOML. Global registration and structure-preserving global removal are deferred until a TOML-aware edit path is implemented.
@@ -70,5 +72,4 @@ The current desktop permission profile does not prove an unavoidable prompt beca
 ## Remaining Phase 0 gates
 
 - Save work and close the currently running Outlook instance gracefully, then perform the one interactive F5 proof that reaches `ThisAddIn_Startup` and confirms the add-in is Active rather than Disabled.
-- Run the pinned Windows workflow in the public GitHub repository and record the successful workflow URL.
 - Node 22 installation remains intentionally deferred; Inspector/conformance is not an early-phase gate.
