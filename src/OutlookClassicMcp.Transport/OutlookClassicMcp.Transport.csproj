@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>OutlookClassicMcp.Transport</AssemblyName>
+    <RootNamespace>OutlookClassicMcp.Transport</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OutlookClassicMcp.Core\OutlookClassicMcp.Core.csproj" />
+  </ItemGroup>
+</Project>

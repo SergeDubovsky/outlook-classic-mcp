@@ -1,0 +1,22 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cs,csproj,props,targets,sln,slnx,xml,resx,settings}]
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+end_of_line = lf
+trim_trailing_whitespace = false
+
+[src/OutlookClassicMcp.AddIn/{ThisAddIn.Designer.cs,Properties/Resources.Designer.cs,Properties/Settings.Designer.cs,Properties/Resources.resx}]
+trim_trailing_whitespace = false

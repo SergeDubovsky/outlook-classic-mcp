@@ -1,0 +1,12 @@
+[mcp_servers.outlook_classic]
+url = "http://127.0.0.1:8765/mcp/"
+bearer_token_env_var = "OUTLOOK_MCP_TOKEN"
+required = false
+default_tools_approval_mode = "writes"
+tool_timeout_sec = 30
+
+[mcp_servers.outlook_classic.tools.outlook_send_draft]
+approval_mode = "prompt"
+
+[mcp_servers.outlook_classic.tools.outlook_delete_messages]
+approval_mode = "prompt"

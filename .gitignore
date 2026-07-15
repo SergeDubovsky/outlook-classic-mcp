@@ -1,0 +1,44 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Aa]rtifacts/
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.coveragexml
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+
+# VSTO and ClickOnce
+*.pfx
+*.cer
+*.pvk
+*.publish.xml
+*.pubxml.user
+app.publish/
+publish/
+
+# Local runtime state
+.env
+*.local.json
+logs/
+.codex/*.bak
+.codex/*.bak.*
+.codex/*.tmp
+.codex/*.tmp.*
+
+# Operating system and editors
+Thumbs.db
+.DS_Store
+.idea/
+*.swp

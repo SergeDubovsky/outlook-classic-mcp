@@ -1,0 +1,105 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: 10.0.302
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Ensure Visual Studio Office and VSTO components
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $instanceJson = @(& $vswhere -products '*' -version '[18.0,19.0)' -format json -utf8)
+          $instances = @((($instanceJson -join [Environment]::NewLine) | ConvertFrom-Json))
+          $instance = $instances |
+            Where-Object { $_.PSObject.Properties.Name -contains 'productId' -and $_.productId -ne 'Microsoft.VisualStudio.Product.BuildTools' } |
+            Select-Object -First 1
+          if ($null -eq $instance) {
+            throw 'The pinned runner does not contain a full Visual Studio 2026 IDE.'
+          }
+
+          $required = @(
+            'Microsoft.VisualStudio.Workload.Office',
+            'Microsoft.VisualStudio.Component.TeamOffice',
+            'Microsoft.VisualStudio.Workload.ManagedDesktop',
+            'Microsoft.Net.Component.4.8.TargetingPack',
+            'Microsoft.Net.Component.4.8.SDK'
+          )
+          $qualified = & $vswhere -products $instance.productId -version '[18.0,19.0)' -requires $required -property installationPath
+          if ([string]::IsNullOrWhiteSpace(($qualified | Select-Object -First 1))) {
+            $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+            $arguments = 'modify --installPath "{0}" --add {1} --quiet --norestart' -f `
+              $instance.installationPath, ($required -join ' --add ')
+            $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Visual Studio component installation failed with exit code $($process.ExitCode)."
+            }
+          }
+
+          $qualified = & $vswhere -products $instance.productId -version '[18.0,19.0)' -requires $required -property installationPath
+          if ([string]::IsNullOrWhiteSpace(($qualified | Select-Object -First 1))) {
+            throw 'Visual Studio still lacks the required Office/VSTO components after installation.'
+          }
+
+      - name: Build, sign manifests, and test
+        shell: pwsh
+        run: .\tools\build.ps1 -Configuration Release
+
+      - name: Verify generated VSTO files
+        shell: pwsh
+        run: .\tools\verify-generated-files.ps1
+
+      - name: Verify dependency license inventory
+        shell: pwsh
+        run: .\tools\verify-dependency-inventory.ps1
+
+      - name: Verify deterministic repository state
+        shell: pwsh
+        run: |
+          git diff --exit-code
+          $untracked = @(git ls-files --others --exclude-standard)
+          if ($untracked.Count -gt 0) {
+            throw "Build created untracked repository files: $($untracked -join ', ')"
+          }
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@3c4e3dcb1aa7874d2c16be7d79418e9b7efd6261 # v4.8.2
