@@ -69,6 +69,8 @@ jobs:
             throw 'Visual Studio still lacks the required Office/VSTO components after installation.'
           }
 
+          .\tools\verify-office-pias.ps1 | Format-List
+
       - name: Ensure VSTO runtime
         shell: pwsh
         run: |

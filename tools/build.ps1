@@ -138,6 +138,7 @@ if (-not (Test-Path -LiteralPath $script:msbuild -PathType Leaf)) {
 }
 
 & (Join-Path $PSScriptRoot 'verify-vsto-runtime.ps1') | Out-Null
+& (Join-Path $PSScriptRoot 'verify-office-pias.ps1') | Out-Null
 
 $outlookProcesses = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue | Select-Object Id, StartTime)
 if ($outlookProcesses.Count -gt 0) {

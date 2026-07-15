@@ -96,6 +96,14 @@ catch {
     $failures.Add($_.Exception.Message)
 }
 
+$officePiaEvidence = @()
+try {
+    $officePiaEvidence = @(& (Join-Path $PSScriptRoot 'verify-office-pias.ps1'))
+}
+catch {
+    $failures.Add($_.Exception.Message)
+}
+
 $dotnetSdks = @()
 $resolvedDotNetSdk = $null
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
@@ -246,6 +254,7 @@ $result = [pscustomobject]@{
     VstoRuntimeVersion = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.Version }
     VstoRuntimeAssembly = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.AssemblyPath }
     VstoRuntimeAssemblyIdentity = if ($null -eq $vstoRuntimeEvidence) { $null } else { $vstoRuntimeEvidence.AssemblyIdentity }
+    OfficePias = $officePiaEvidence
     OutlookPath = $outlookPath
     OutlookVersion = $outlookVersion
     OutlookPlatform = $officePlatform

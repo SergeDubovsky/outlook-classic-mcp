@@ -29,7 +29,8 @@
     <LoadBehavior>3</LoadBehavior>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
-    <DefineConstants>VSTO40</DefineConstants>
+    <DefineConstants>VSTO40;USEOFFICEINTEROP</DefineConstants>
+    <OfficePiaRoot Condition="'$(OfficePiaRoot)' == ''">$(MSBuildProgramFiles32)\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15</OfficePiaRoot>
     <BootstrapperEnabled>true</BootstrapperEnabled>
     <BootstrapperComponentsLocation>HomeSite</BootstrapperComponentsLocation>
     <ResolveComReferenceSilent>true</ResolveComReferenceSilent>
@@ -141,10 +142,12 @@
     <When Condition="$([System.String]::Copy(&quot;;$(DefineConstants);&quot;).ToLower().Contains(';useofficeinterop;')) or $([System.String]::Copy(&quot;,$(DefineConstants),&quot;).ToLower().Contains(',useofficeinterop,'))">
       <ItemGroup>
         <Reference Include="Office, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+          <HintPath>$(OfficePiaRoot)\Office.dll</HintPath>
           <Private>False</Private>
           <EmbedInteropTypes>true</EmbedInteropTypes>
         </Reference>
         <Reference Include="Microsoft.Office.Interop.Outlook, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+          <HintPath>$(OfficePiaRoot)\Microsoft.Office.Interop.Outlook.dll</HintPath>
           <Private>False</Private>
           <EmbedInteropTypes>true</EmbedInteropTypes>
         </Reference>
