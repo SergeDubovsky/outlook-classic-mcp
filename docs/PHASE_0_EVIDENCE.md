@@ -1,6 +1,6 @@
 # Phase 0 evidence
 
-Status: in progress
+Status: complete
 Last updated: 2026-07-15
 
 ## Decisions
@@ -47,6 +47,16 @@ Generated-file baselines:
 
 After that proof, the project was moved under `src`, retargeted to .NET Framework 4.8, pinned to C# 9.0 through `Directory.Build.props`, and connected to the Office-free Core and Transport projects. The generated files still match these baselines.
 
+## Interactive Outlook F5 proof
+
+On 2026-07-15, a second fresh scratch solution was instantiated from the same installed `VSTO_Outlook15AddIn_CS` template and `Office15Wizard` through `VisualStudio.DTE.18.0`. The project remained untouched: it targeted .NET Framework 4.7.2, contained no manifest-signing properties or project references, and received its temporary non-exportable signing certificate only through inherited MSBuild properties.
+
+Visual Studio F5 launched the installed `C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE`. A breakpoint set at the stock `ThisAddIn.cs:13` stopped on entry to `OutlookClassicMcp.StockF5.ThisAddIn.ThisAddIn_Startup` in `OUTLOOK.EXE` on the VSTA main thread. The installed Click-to-Run configuration reported platform `x64`.
+
+After continuing, Outlook Options listed `OutlookClassicMcp.StockF5` under **Active Application Add-ins**. The Disabled Items manager reported that there were no disabled items. While the add-in was active, its development registration had `LoadBehavior=3` and referenced the expected local `.vsto` manifest; the Outlook `DisabledItems` and `CrashingAddinList` state remained absent before and after the proof.
+
+Outlook was closed normally through its window, after which Visual Studio returned to design mode. `VSTOClean` completed successfully, the untouched project source hash remained unchanged, and both registry views were free of the scratch add-in, form-region, VSTO inclusion, and solution-metadata state. The temporary certificate and CA copy, CNG container, private-key file, scratch solution, Outlook process, and Visual Studio process were all absent after cleanup.
+
 ## Build and automated tests
 
 Locked restore succeeds for all five projects. Debug and Release/Any CPU builds succeed with full Visual Studio MSBuild and ephemeral manifest signing. The isolated build refuses to overwrite pre-existing same-name VSTO development state, invokes `VSTOClean` for every attempted configuration, and verifies that its Outlook registration, VSTO inclusion/metadata entries, certificate, CNG container, and key file are absent afterward.
@@ -69,7 +79,6 @@ Codex CLI 0.144.4 strictly parses the committed repository configuration, includ
 
 The current desktop permission profile does not prove an unavoidable prompt because an effective top-level `never` approval policy can auto-approve MCP tools. The plan's fail-closed rule therefore remains active: send and soft-delete are not implemented or exposed.
 
-## Remaining Phase 0 gates
+## Phase 0 completion
 
-- Save work and close the currently running Outlook instance gracefully, then perform the one interactive F5 proof that reaches `ThisAddIn_Startup` and confirms the add-in is Active rather than Disabled.
-- Node 22 installation remains intentionally deferred; Inspector/conformance is not an early-phase gate.
+All Phase 0 acceptance gates are complete. Phase 1 has not started. Node 22 installation remains intentionally deferred; Inspector/conformance is not an early-phase gate.

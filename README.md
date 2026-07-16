@@ -2,7 +2,7 @@
 
 An open-source, brokerless VSTO add-in that exposes the stores in an active Classic Outlook profile through an authenticated local Model Context Protocol endpoint.
 
-The project is currently in Phase 0: repository, toolchain, build, and runtime-feasibility proof. Mailbox-reading and write tools are not enabled yet.
+Phase 0 is complete: the repository, toolchain, stock-template F5 path, public Windows CI, and runtime feasibility are proven. Phase 1 has not started, and mailbox-reading and write tools are not enabled yet.
 
 ## Security boundary
 
