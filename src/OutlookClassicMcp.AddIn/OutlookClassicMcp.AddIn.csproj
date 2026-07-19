@@ -227,6 +227,9 @@
     <Compile Include="Runtime\HostLifecycleState.cs" />
     <Compile Include="Runtime\AddInHost.cs" />
     <Compile Include="Runtime\MetadataDiagnostics.cs" />
+    <Compile Include="Runtime\OutlookErrorMapper.cs" />
+    <Compile Include="Runtime\OutlookGateway.cs" />
+    <Compile Include="Runtime\OutlookRuntimeContext.cs" />
     <Compile Include="Runtime\OutlookStaDispatcher.cs" />
     <Compile Include="Runtime\OutlookThreadContext.cs" />
     <Compile Include="ThisAddIn.cs">

@@ -14,28 +14,75 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private readonly Queue<IDispatchWorkItem> _queue = new Queue<IDispatchWorkItem>();
         private readonly int _capacity;
         private readonly DispatchControl _control;
+        private readonly Action? _onUnavailable;
+        private readonly object? _ownerContext;
         private readonly Func<IntPtr, int, IntPtr, IntPtr, bool> _postMessage;
+        private TaskCompletionSource<bool>? _shutdownQuiescence;
         private IntPtr _controlHandle;
         private bool _accepting = true;
         private bool _active;
         private bool _drainScheduled;
         private bool _draining;
         private bool _disposed;
+        private bool _unavailableNotified;
         private bool _wakeupAvailable = true;
 
         public OutlookStaDispatcher()
-            : this(DefaultCapacity, NativeMethods.PostMessage)
+            : this(null, DefaultCapacity, NativeMethods.PostMessage, null)
+        {
+        }
+
+        internal OutlookStaDispatcher(object ownerContext)
+            : this(
+                ownerContext ?? throw new ArgumentNullException(nameof(ownerContext)),
+                DefaultCapacity,
+                NativeMethods.PostMessage,
+                null)
+        {
+        }
+
+        internal OutlookStaDispatcher(object ownerContext, Action onUnavailable)
+            : this(
+                ownerContext ?? throw new ArgumentNullException(nameof(ownerContext)),
+                DefaultCapacity,
+                NativeMethods.PostMessage,
+                onUnavailable ?? throw new ArgumentNullException(nameof(onUnavailable)))
         {
         }
 
         internal OutlookStaDispatcher(Func<IntPtr, int, IntPtr, IntPtr, bool> postMessage)
-            : this(DefaultCapacity, postMessage)
+            : this(null, DefaultCapacity, postMessage, null)
+        {
+        }
+
+        internal OutlookStaDispatcher(
+            object ownerContext,
+            Func<IntPtr, int, IntPtr, IntPtr, bool> postMessage)
+            : this(
+                ownerContext ?? throw new ArgumentNullException(nameof(ownerContext)),
+                DefaultCapacity,
+                postMessage,
+                null)
+        {
+        }
+
+        internal OutlookStaDispatcher(
+            object ownerContext,
+            Func<IntPtr, int, IntPtr, IntPtr, bool> postMessage,
+            Action onUnavailable)
+            : this(
+                ownerContext ?? throw new ArgumentNullException(nameof(ownerContext)),
+                DefaultCapacity,
+                postMessage,
+                onUnavailable ?? throw new ArgumentNullException(nameof(onUnavailable)))
         {
         }
 
         private OutlookStaDispatcher(
+            object? ownerContext,
             int capacity,
-            Func<IntPtr, int, IntPtr, IntPtr, bool> postMessage)
+            Func<IntPtr, int, IntPtr, IntPtr, bool> postMessage,
+            Action? onUnavailable)
         {
             if (capacity <= 0)
             {
@@ -43,6 +90,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
             }
 
             _postMessage = postMessage ?? throw new ArgumentNullException(nameof(postMessage));
+            _onUnavailable = onUnavailable;
+            _ownerContext = ownerContext;
             OwnerThread = OutlookThreadContext.Capture();
             if (OwnerThread.ApartmentState != ApartmentState.STA)
             {
@@ -98,7 +147,17 @@ namespace OutlookClassicMcp.AddIn.Runtime
             var scheduled = false;
             lock (_gate)
             {
-                if (!_accepting || _disposed)
+                if (_disposed)
+                {
+                    return Task.FromException<T>(new InvalidOperationException("HOST_STOPPING"));
+                }
+
+                if (!_wakeupAvailable)
+                {
+                    return Task.FromException<T>(new InvalidOperationException("HOST_UNAVAILABLE"));
+                }
+
+                if (!_accepting)
                 {
                     return Task.FromException<T>(new InvalidOperationException("HOST_STOPPING"));
                 }
@@ -109,6 +168,72 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 }
 
                 workItem = new DispatchWorkItem<T>(operation, cancellationToken);
+                _queue.Enqueue(workItem);
+                scheduled = TryScheduleDrainUnderLock();
+            }
+
+            if (!scheduled)
+            {
+                FailDrain(null);
+            }
+
+            return workItem.Task;
+        }
+
+        public Task<TResult> InvokeWithContextAsync<TContext, TResult>(
+            Func<TContext, TResult> operation,
+            CancellationToken cancellationToken)
+            where TContext : class
+        {
+            if (operation == null)
+            {
+                throw new ArgumentNullException(nameof(operation));
+            }
+
+            if (operation.Target != null)
+            {
+                throw new ArgumentException(
+                    "Context-aware Outlook operations must be static.",
+                    nameof(operation));
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled<TResult>(cancellationToken);
+            }
+
+            if (!(_ownerContext is TContext))
+            {
+                return Task.FromException<TResult>(new InvalidOperationException("HOST_UNAVAILABLE"));
+            }
+
+            ContextDispatchWorkItem<TContext, TResult> workItem;
+            var scheduled = false;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_STOPPING"));
+                }
+
+                if (!_wakeupAvailable)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_UNAVAILABLE"));
+                }
+
+                if (!_accepting)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_STOPPING"));
+                }
+
+                if (_queue.Count + (_active ? 1 : 0) >= _capacity)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_BUSY"));
+                }
+
+                workItem = new ContextDispatchWorkItem<TContext, TResult>(
+                    operation,
+                    cancellationToken);
                 _queue.Enqueue(workItem);
                 scheduled = TryScheduleDrainUnderLock();
             }
@@ -132,19 +257,32 @@ namespace OutlookClassicMcp.AddIn.Runtime
             }
         }
 
-        public void BeginShutdown()
+        public Task BeginShutdown()
         {
             IDispatchWorkItem[] pending;
+            TaskCompletionSource<bool> quiescence;
+            var completeQuiescence = false;
             lock (_gate)
             {
-                if (!_accepting)
+                if (_shutdownQuiescence == null)
                 {
-                    return;
+                    _shutdownQuiescence = new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+                quiescence = _shutdownQuiescence;
+
+                if (_accepting)
+                {
+                    _accepting = false;
+                    pending = _queue.ToArray();
+                    _queue.Clear();
+                }
+                else
+                {
+                    pending = Array.Empty<IDispatchWorkItem>();
                 }
 
-                _accepting = false;
-                pending = _queue.ToArray();
-                _queue.Clear();
+                completeQuiescence = !_active && _queue.Count == 0;
             }
 
             var exception = new InvalidOperationException("HOST_STOPPING");
@@ -152,6 +290,13 @@ namespace OutlookClassicMcp.AddIn.Runtime
             {
                 workItem.Fail(exception);
             }
+
+            if (completeQuiescence)
+            {
+                quiescence.TrySetResult(true);
+            }
+
+            return quiescence.Task;
         }
 
         public bool TryPostLifecycleCallback(Action callback)
@@ -183,6 +328,14 @@ namespace OutlookClassicMcp.AddIn.Runtime
 
         public void Dispose()
         {
+            AssertOutlookThread();
+            var quiescence = BeginShutdown();
+            if (!quiescence.IsCompleted)
+            {
+                throw new InvalidOperationException("HOST_NOT_QUIESCENT");
+            }
+
+            quiescence.GetAwaiter().GetResult();
             IntPtr controlHandle;
             lock (_gate)
             {
@@ -192,7 +345,6 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 }
             }
 
-            AssertOutlookThread();
             lock (_gate)
             {
                 if (_disposed)
@@ -208,7 +360,6 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 _controlHandle = IntPtr.Zero;
             }
 
-            BeginShutdown();
             while (NativeMethods.PeekMessage(
                 out _,
                 controlHandle,
@@ -262,14 +413,20 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 }
 
                 AssertOutlookThread();
-                workItem.Invoke();
+                workItem.Invoke(_ownerContext);
 
+                TaskCompletionSource<bool>? quiescence = null;
                 lock (_gate)
                 {
                     _active = false;
+                    if (!_accepting && _queue.Count == 0)
+                    {
+                        quiescence = _shutdownQuiescence;
+                    }
                 }
 
                 workItem.Complete();
+                quiescence?.TrySetResult(true);
             }
             catch
             {
@@ -338,13 +495,28 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private void FailDrain(IDispatchWorkItem? activeWorkItem)
         {
             IDispatchWorkItem[] pending;
+            TaskCompletionSource<bool>? quiescence;
+            var notifyUnavailable = false;
             lock (_gate)
             {
                 _accepting = false;
-                _active = false;
+                if (activeWorkItem != null)
+                {
+                    _active = false;
+                }
                 _drainScheduled = false;
+                _wakeupAvailable = false;
+                _lifecycleCallbacks.Clear();
                 pending = _queue.ToArray();
                 _queue.Clear();
+                quiescence = !_active && _queue.Count == 0
+                    ? _shutdownQuiescence
+                    : null;
+                if (!_disposed && !_unavailableNotified)
+                {
+                    _unavailableNotified = true;
+                    notifyUnavailable = true;
+                }
             }
 
             var exception = new InvalidOperationException("HOST_UNAVAILABLE");
@@ -352,6 +524,18 @@ namespace OutlookClassicMcp.AddIn.Runtime
             foreach (var workItem in pending)
             {
                 workItem.Fail(exception);
+            }
+
+            quiescence?.TrySetResult(true);
+            if (notifyUnavailable)
+            {
+                try
+                {
+                    _onUnavailable?.Invoke();
+                }
+                catch (Exception)
+                {
+                }
             }
         }
 
@@ -428,7 +612,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
 
         private interface IDispatchWorkItem
         {
-            void Invoke();
+            void Invoke(object? ownerContext);
 
             void Complete();
 
@@ -460,7 +644,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
 
             public Task<T> Task => _completion.Task;
 
-            public void Invoke()
+            public void Invoke(object? ownerContext)
             {
                 if (Interlocked.CompareExchange(ref _state, Running, Queued) != Queued)
                 {
@@ -470,6 +654,117 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 try
                 {
                     _result = _operation();
+                }
+                catch (Exception exception)
+                {
+                    _exception = exception;
+                }
+                finally
+                {
+                    Volatile.Write(ref _state, Invoked);
+                }
+            }
+
+            public void Complete()
+            {
+                var state = Volatile.Read(ref _state);
+                if (state == Canceled)
+                {
+                    Interlocked.CompareExchange(ref _state, Terminal, Canceled);
+                }
+                else if (Interlocked.CompareExchange(ref _state, Terminal, Invoked) == Invoked)
+                {
+                    if (_exception != null)
+                    {
+                        _completion.TrySetException(_exception);
+                    }
+                    else
+                    {
+                        _completion.TrySetResult(_result);
+                    }
+                }
+
+                _cancellationRegistration.Dispose();
+            }
+
+            public void Fail(Exception exception)
+            {
+                while (true)
+                {
+                    var state = Volatile.Read(ref _state);
+                    if (state == Terminal)
+                    {
+                        break;
+                    }
+
+                    if (Interlocked.CompareExchange(ref _state, Terminal, state) != state)
+                    {
+                        continue;
+                    }
+
+                    if (state != Canceled)
+                    {
+                        _completion.TrySetException(exception);
+                    }
+
+                    break;
+                }
+
+                _cancellationRegistration.Dispose();
+            }
+
+            private void CancelQueuedWork()
+            {
+                if (Interlocked.CompareExchange(ref _state, Canceled, Queued) == Queued)
+                {
+                    _completion.TrySetCanceled(_cancellationToken);
+                }
+            }
+        }
+
+        private sealed class ContextDispatchWorkItem<TContext, TResult> : IDispatchWorkItem
+            where TContext : class
+        {
+            private const int Queued = 0;
+            private const int Canceled = 1;
+            private const int Running = 2;
+            private const int Invoked = 3;
+            private const int Terminal = 4;
+            private readonly CancellationToken _cancellationToken;
+            private readonly CancellationTokenRegistration _cancellationRegistration;
+            private readonly TaskCompletionSource<TResult> _completion =
+                new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly Func<TContext, TResult> _operation;
+            private Exception? _exception;
+            private TResult _result = default!;
+            private int _state = Queued;
+
+            public ContextDispatchWorkItem(
+                Func<TContext, TResult> operation,
+                CancellationToken cancellationToken)
+            {
+                _operation = operation;
+                _cancellationToken = cancellationToken;
+                _cancellationRegistration = cancellationToken.Register(CancelQueuedWork);
+            }
+
+            public Task<TResult> Task => _completion.Task;
+
+            public void Invoke(object? ownerContext)
+            {
+                if (Interlocked.CompareExchange(ref _state, Running, Queued) != Queued)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (!(ownerContext is TContext typedContext))
+                    {
+                        throw new InvalidOperationException("HOST_UNAVAILABLE");
+                    }
+
+                    _result = _operation(typedContext);
                 }
                 catch (Exception exception)
                 {

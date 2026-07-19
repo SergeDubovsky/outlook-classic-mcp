@@ -9,6 +9,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
 {
     internal sealed class AddInHost
     {
+        private readonly Outlook.Application _application;
         private readonly Outlook.ApplicationEvents_11_Event _applicationEvents;
         private readonly MetadataDiagnostics _diagnostics;
         private readonly HostLifecycle _lifecycle = new HostLifecycle();
@@ -17,6 +18,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private readonly TaskCompletionSource<bool> _shutdownCompletion =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private OutlookStaDispatcher? _dispatcher;
+        private OutlookGateway? _gateway;
         private LoopbackHttpServer? _server;
         private Task? _initializationTask;
         private Timer? _shutdownWatchdog;
@@ -31,7 +33,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
 
         public AddInHost(Outlook.Application application)
         {
-            _ = application ?? throw new ArgumentNullException(nameof(application));
+            _application = application ?? throw new ArgumentNullException(nameof(application));
             _applicationEvents = (Outlook.ApplicationEvents_11_Event)application;
             _diagnostics = MetadataDiagnostics.Create();
         }
@@ -61,12 +63,25 @@ namespace OutlookClassicMcp.AddIn.Runtime
             try
             {
                 var dispatcher = _dispatcher;
-                if (dispatcher == null || !dispatcher.IsAccepting)
+                if (dispatcher == null)
                 {
-                    _dispatcher = null;
-                    dispatcher?.Dispose();
-                    dispatcher = new OutlookStaDispatcher();
+                    var runtimeContext = new OutlookRuntimeContext(
+                        _application,
+                        OutlookThreadContext.Capture());
+                    dispatcher = new OutlookStaDispatcher(
+                        runtimeContext,
+                        OnDispatcherUnavailable);
                     _dispatcher = dispatcher;
+                    _gateway = new OutlookGateway(dispatcher);
+                }
+                else if (!dispatcher.IsAccepting)
+                {
+                    throw new InvalidOperationException(
+                        "The Outlook dispatcher is unavailable. Restart Outlook to recover it.");
+                }
+                else if (_gateway == null)
+                {
+                    _gateway = new OutlookGateway(dispatcher);
                 }
 
                 dispatcher.AssertOutlookThread();
@@ -237,7 +252,9 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 try
                 {
                     token = BearerToken.LoadFromProcessEnvironment();
-                    candidate = new LoopbackHttpServer(token, CreateStatusSnapshot);
+                    var gateway = _gateway
+                        ?? throw new InvalidOperationException("The Outlook gateway is unavailable.");
+                    candidate = new LoopbackHttpServer(token, CreateStatusSnapshot, gateway);
                     token = null;
 
                     if (Volatile.Read(ref _stopRequested) != 0)
@@ -332,6 +349,16 @@ namespace OutlookClassicMcp.AddIn.Runtime
             _ = BeginShutdown();
         }
 
+        private void OnDispatcherUnavailable()
+        {
+            if (Volatile.Read(ref _stopRequested) != 0)
+            {
+                return;
+            }
+
+            _lifecycle.TryMarkDegraded();
+        }
+
         private void CompleteShutdownAfterInitialization(Task initializationTask)
         {
             ObserveInitialization(initializationTask);
@@ -357,13 +384,45 @@ namespace OutlookClassicMcp.AddIn.Runtime
             }
 
             ObserveTransport(completion);
+            CompleteShutdownAfterDispatcher(onOutlookThread);
+        }
+
+        private void CompleteShutdownAfterDispatcher(bool onOutlookThread)
+        {
+            var dispatcher = _dispatcher;
+            Task completion;
+            try
+            {
+                completion = dispatcher?.BeginShutdown() ?? Task.CompletedTask;
+            }
+            catch (Exception exception)
+            {
+                RecordShutdownFailure(exception);
+                completion = Task.CompletedTask;
+            }
+
+            if (!completion.IsCompleted)
+            {
+                completion.ConfigureAwait(false).GetAwaiter().OnCompleted(
+                    () => CompleteShutdownAfterDispatcher(onOutlookThread: false));
+                return;
+            }
+
+            try
+            {
+                completion.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                RecordShutdownFailure(exception);
+            }
+
             if (onOutlookThread)
             {
                 FinalizeShutdownOnOutlookThread();
                 return;
             }
 
-            var dispatcher = _dispatcher;
             if (dispatcher != null && dispatcher.TryPostLifecycleCallback(FinalizeShutdownOnOutlookThread))
             {
                 ArmShutdownWatchdog();
@@ -404,6 +463,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     finally
                     {
                         _dispatcher = null;
+                        _gateway = null;
                     }
                 }
 

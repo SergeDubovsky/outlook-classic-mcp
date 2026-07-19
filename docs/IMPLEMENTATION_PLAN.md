@@ -2,7 +2,7 @@
 
 ## Implementation plan and repository handoff
 
-Status: Phases 0-2 complete; Phase 3 not started
+Status: Phases 0-3 complete; Phase 4 not started
 Plan version: 1.1
 Prepared: 2026-07-14
 Target: Windows x64, Classic Outlook, one active Outlook profile, local Codex clients
@@ -705,6 +705,8 @@ Acceptance:
 - The add-in remains enabled after three Outlook restart cycles.
 
 This is the architectural go/no-go milestone. If it fails because dependency loading, thread dispatch, shutdown, or responsiveness cannot be stabilized, stop feature work and reevaluate process isolation.
+
+Completed on 2026-07-19. The native Codex call, independently matched store inventory, verified Outlook UI-STA execution, sequential and concurrent workloads, responsiveness checks, clean shutdown, and three restart cycles passed. See [Phase 3 evidence](PHASE_3_EVIDENCE.md).
 
 ### Phase 4 — bounded read-only mail access
 

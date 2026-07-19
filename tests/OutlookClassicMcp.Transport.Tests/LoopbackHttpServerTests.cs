@@ -46,12 +46,31 @@ namespace OutlookClassicMcp.Transport.Tests
             Assert.Throws<ObjectDisposedException>((Action)server.Start);
         }
 
+        [Test]
+        public void ToolDeadlineLeavesResponseGraceBeforeTheHandlerDeadline()
+        {
+            Assert.That(RequestLimits.DefaultToolDeadline,
+                Is.LessThan(RequestLimits.DefaultHandlerDeadline));
+            Assert.That(BearerToken.TryCreate(TokenText, out var token), Is.True);
+            using (token)
+            {
+                Assert.Throws<ArgumentOutOfRangeException>((Action)(() =>
+                    _ = new LoopbackHttpServer(
+                        token,
+                        () => new OutlookStatusSnapshot("online", true, "1.0.0"),
+                        new FakeOutlookGateway(),
+                        toolDeadline: TimeSpan.FromSeconds(2),
+                        handlerDeadline: TimeSpan.FromSeconds(2))));
+            }
+        }
+
         private static LoopbackHttpServer CreateServer()
         {
             Assert.That(BearerToken.TryCreate(TokenText, out var token), Is.True);
             return new LoopbackHttpServer(
                 token,
-                () => new OutlookStatusSnapshot("online", true, "1.0.0"));
+                () => new OutlookStatusSnapshot("online", true, "1.0.0"),
+                new FakeOutlookGateway());
         }
     }
 }

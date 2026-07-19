@@ -10,7 +10,7 @@ param(
     [ValidateRange(1, 10)]
     [int]$ExpectedCycles = 3,
 
-    [ValidateSet(1, 2)]
+    [ValidateSet(1, 2, 3)]
     [int]$ExpectedPhase = 1,
 
     [string]$LogDirectory = (Join-Path $env:LOCALAPPDATA 'OutlookClassicMcp\logs')
@@ -447,6 +447,24 @@ finally {
 
 if ($failures.Count -gt 0) {
     throw "Phase $ExpectedPhase smoke verification failed:`n - $($failures -join "`n - ")"
+}
+
+if ($ExpectedPhase -eq 3) {
+    [pscustomobject]@{
+        Phase = 3
+        VerifiedCycleCount = $sessions.Count
+        ExpectedEventCountPerCycle = $expectedEvents.Count
+        VerifiedEventCount = $smokeRecords.Count
+        StartupCallbackUnderLimitCount = $startupDurations.Count
+        DispatcherThreadMatchCount = $sessions.Count
+        RuntimeIdentitySha256 = $expectedFingerprint.ToLowerInvariant()
+        DiagnosticsLogFileCount = $logFiles.Count
+        DiagnosticsAclVerified = $true
+        OutlookStopped = $true
+        PortReleased = $true
+        LoadBehaviorVerified = $true
+    }
+    return
 }
 
 [pscustomobject]@{

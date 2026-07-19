@@ -194,11 +194,13 @@ namespace OutlookClassicMcp.Core.Tests
                         Is.True);
                     Assert.That(queued[0].IsCanceled, Is.True);
 
-                    activeDispatcher.BeginShutdown();
-                    activeDispatcher.BeginShutdown();
+                    var firstShutdown = activeDispatcher.BeginShutdown();
+                    var secondShutdown = activeDispatcher.BeginShutdown();
 
                     Assert.That(activeDispatcher.IsAccepting, Is.False);
                     Assert.That(activeDispatcher.QueueDepth, Is.EqualTo(1));
+                    Assert.That(secondShutdown, Is.SameAs(firstShutdown));
+                    Assert.That(firstShutdown.IsCompleted, Is.False);
                     var rejected = activeDispatcher.InvokeAsync(() => -2, CancellationToken.None);
                     AssertFaultedWithMessage(rejected, "HOST_STOPPING");
                     Assert.That(queuedCompletions.Wait(TimeSpan.FromSeconds(5)), Is.True);
@@ -221,6 +223,7 @@ namespace OutlookClassicMcp.Core.Tests
                         Is.True);
                     Assert.That(active.Status, Is.EqualTo(TaskStatus.RanToCompletion));
                     Assert.That(active.Result, Is.EqualTo(42));
+                    Assert.That(firstShutdown.Wait(TimeSpan.FromSeconds(5)), Is.True);
                     Assert.That(completionCounts, Is.All.EqualTo(1));
                 }
                 finally

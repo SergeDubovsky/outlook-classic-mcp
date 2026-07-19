@@ -1,6 +1,6 @@
 # Architecture
 
-The authoritative architecture and its acceptance gates are in `IMPLEMENTATION_PLAN.md`. This document summarizes the boundaries implemented and accepted through Phase 2. The live results are recorded in [Phase 2 evidence](PHASE_2_EVIDENCE.md).
+The authoritative architecture and its acceptance gates are in `IMPLEMENTATION_PLAN.md`. This document summarizes the boundaries implemented and accepted through Phase 3. The live results are recorded in [Phase 3 evidence](PHASE_3_EVIDENCE.md).
 
 ## Process model
 
@@ -12,13 +12,13 @@ Codex MCP client
     -> OutlookClassicMcp.Transport
        -> initialize / initialized / ping / tools/list
        -> outlook_status (host state, listener readiness, version)
+       -> outlook_probe
+          -> OutlookClassicMcp.Core bounded contracts and policy
+          -> one bounded Outlook UI-STA dispatcher
+          -> Outlook Object Model store metadata
+          -> immutable managed DTOs
 
-Future mailbox tools, not exposed in Phase 2:
-    OutlookClassicMcp.Transport
-    -> OutlookClassicMcp.Core policy and typed tools
-    -> one bounded Outlook UI-STA dispatcher
-    -> Outlook Object Model
-    -> immutable managed DTOs
+Future message and write tools are not exposed in Phase 3.
 ```
 
 ## Assembly ownership
@@ -27,11 +27,21 @@ Future mailbox tools, not exposed in Phase 2:
 - **Transport** owns `HttpListener`, authentication, HTTP validation, limits, and MCP adaptation. It contains no Office or VSTO references.
 - **Core** owns immutable contracts, policy, validation, and tool orchestration. It contains no Office, VSTO, WinForms, registry, or COM references.
 
-## Phase 2 transport
+## Authenticated transport
 
 The add-in creates one `HttpListener` at the literal prefix `http://127.0.0.1:8765/mcp/`. It loads one canonical 32-byte base64url bearer token from the Outlook process environment before binding. `tools/configure-codex.ps1` provisions that variable at current-user scope, but an already-running Outlook process does not see a new value. The listener therefore authenticates against a process-snapshotted token until Outlook restarts. Missing or invalid configuration fails closed and leaves the add-in loaded in `Degraded` state without a listener.
 
-Each validated HTTP POST creates an isolated, stateless server session using the pinned `ModelContextProtocol.Core` 1.4.1 `StreamableHttpServerTransport`. Session identifiers are neither issued nor accepted. The available protocol operations are initialize, `notifications/initialized`, ping, `tools/list`, and `tools/call` restricted to `outlook_status`. The status provider reads managed lifecycle state only; no Outlook Object Model call or STA dispatch occurs.
+Each validated HTTP POST creates an isolated, stateless server session using the pinned `ModelContextProtocol.Core` 1.4.1 `StreamableHttpServerTransport`. Session identifiers are neither issued nor accepted. The available protocol operations are initialize, `notifications/initialized`, ping, `tools/list`, and `tools/call` restricted to the ordered allowlist `outlook_status`, `outlook_probe`. The status provider reads managed lifecycle state only; no Outlook Object Model call or STA dispatch occurs.
+
+## Phase 3 Outlook boundary
+
+`outlook_probe` is the first tool to cross the Outlook boundary. Transport applies a 14-second tool deadline, then calls the injected Core gateway interface. The AddIn gateway enqueues one static synchronous operation onto the capacity-16 dispatcher. A private window message wakes Outlook's captured UI thread; the operation verifies both managed and native thread identity and the `STA` apartment before accessing the Outlook Object Model.
+
+The operation uses `ThisAddIn.Application` and its host-owned Session; it never creates an Outlook Application. Store collections, stores, and standard-folder objects are operation-owned and released in reverse scope after their scalar values are copied. No COM object enters Core, Transport, the queue payload, a continuation, a cache, or an MCP result.
+
+The probe returns bounded immutable data for host version/bitness, the active profile label, dispatcher proof, configured store count, at most 64 store labels/types/capability flags, and tri-state standard-folder availability. Archive availability is always `unknown` with a fixed warning because the Outlook Object Model does not expose it. Message content, attachments, store identifiers, and folder objects are not read or returned.
+
+Only one Outlook operation runs at a time. Cancellation can remove queued work but cannot abort COM work after it starts. Shutdown rejects new work, completes queued work with a bounded stopping failure, permits an active Outlook operation to finish, and defers final dispatcher disposal until quiescence. A dispatcher wake-up failure fails pending work and degrades the host instead of silently stranding requests.
 
 ## HTTP policy
 
@@ -48,4 +58,4 @@ MCP responses use `text/event-stream`, `Cache-Control: no-cache, no-store`, and 
 
 ## Current phase
 
-Phase 2 is complete. Automated transport tests, three live Outlook restart/endpoint cycles, clean port release, and an actual Codex CLI `outlook_status` call passed. Phase 3 will add the first Outlook/profile/store metadata probe through the STA dispatcher; no mailbox tool is currently exposed.
+Phase 3 is complete. Automated Core and Transport tests, independent store-inventory agreement, verified UI-STA execution, twenty sequential and four concurrent probes, one native Codex probe, three live Outlook cycles, responsiveness checks, and clean port release passed. Phase 4 will add bounded read-only message access; no message-read or write tool is currently exposed.

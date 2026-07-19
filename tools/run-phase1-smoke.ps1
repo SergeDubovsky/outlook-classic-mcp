@@ -11,8 +11,10 @@ param(
     [ValidateRange(15, 180)]
     [int]$ShutdownTimeoutSeconds = 60,
 
-    [ValidateSet(1, 2)]
-    [int]$ExpectedPhase = 1
+    [ValidateSet(1, 2, 3)]
+    [int]$ExpectedPhase = 1,
+
+    [string]$ExpectedStoreInventoryPath
 )
 
 Set-StrictMode -Version Latest
@@ -23,8 +25,19 @@ if ($ExpectedPhase -eq 1) {
         'Phase 1 smoke mode is retired because the current add-in always starts the Phase 2 listener. ' +
         'Run tools\run-phase2-smoke.ps1 instead; historical results remain in docs\PHASE_1_EVIDENCE.md.')
 }
+if ($ExpectedPhase -eq 3 -and [string]::IsNullOrWhiteSpace($ExpectedStoreInventoryPath)) {
+    throw 'Phase 3 requires -ExpectedStoreInventoryPath.'
+}
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+if ($ExpectedPhase -eq 3) {
+    . (Join-Path $PSScriptRoot 'phase3-smoke-common.ps1')
+    $ExpectedStoreInventoryPath = (
+        Resolve-Path -LiteralPath $ExpectedStoreInventoryPath -ErrorAction Stop).Path
+    $null = Import-Phase3ExpectedStoreInventory `
+        -Path $ExpectedStoreInventoryPath `
+        -RepositoryRoot $repositoryRoot
+}
 $addInProjectPath = Join-Path $repositoryRoot 'src\OutlookClassicMcp.AddIn\OutlookClassicMcp.AddIn.csproj'
 $releaseDirectory = Join-Path $repositoryRoot 'src\OutlookClassicMcp.AddIn\bin\Release'
 $releaseManifestPath = Join-Path $releaseDirectory 'OutlookClassicMcp.AddIn.vsto'
@@ -768,6 +781,13 @@ $vstoLogAlertsBefore = $null
 $previousVstoLogAlerts = [Environment]::GetEnvironmentVariable('VSTO_LOGALERTS', 'Process')
 $previousVstoSuppressAlerts = [Environment]::GetEnvironmentVariable('VSTO_SUPPRESSDISPLAYALERTS', 'Process')
 $cycleResults = [System.Collections.Generic.List[object]]::new()
+$phase3EndpointResults = [System.Collections.Generic.List[object]]::new()
+$phase3CodexResult = $null
+$phase3OperationIds = $null
+if ($ExpectedPhase -eq 3) {
+    $phase3OperationIds =
+        [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+}
 $smokeStartedUtc = $null
 $smokeFinishedUtc = $null
 $verificationResult = $null
@@ -775,7 +795,7 @@ $previousOutlookMcpToken = [Environment]::GetEnvironmentVariable('OUTLOOK_MCP_TO
 if ($ExpectedPhase -ge 2) {
     $phaseToken = [Environment]::GetEnvironmentVariable('OUTLOOK_MCP_TOKEN', 'User')
     if ($phaseToken -notmatch '^[A-Za-z0-9_-]{43}$') {
-        throw 'Phase 2 requires a canonical current-user OUTLOOK_MCP_TOKEN. Run tools\configure-codex.ps1 -Action Install first.'
+        throw "Phase $ExpectedPhase requires a canonical current-user OUTLOOK_MCP_TOKEN. Run tools\configure-codex.ps1 -Action Install first."
     }
     [Environment]::SetEnvironmentVariable('OUTLOOK_MCP_TOKEN', $phaseToken, 'Process')
 }
@@ -857,12 +877,29 @@ try {
 
                 $endpointResult = $null
                 $codexResult = $null
-                if ($ExpectedPhase -ge 2) {
+                if ($ExpectedPhase -eq 2) {
                     $endpointResult = & (Join-Path $PSScriptRoot 'test-phase2-endpoint.ps1') `
                         -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds, 60))
                     if ($cycle -eq 1) {
                         $codexResult = & (Join-Path $PSScriptRoot 'test-phase2-codex.ps1') `
                             -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds + 30, 180))
+                    }
+                }
+                elseif ($ExpectedPhase -eq 3) {
+                    $phase3Mode = if ($cycle -eq 1) { 'Full' } else { 'Restart' }
+                    $endpointResult = & (Join-Path $PSScriptRoot 'test-phase3-endpoint.ps1') `
+                        -ExpectedStoreInventoryPath $ExpectedStoreInventoryPath `
+                        -OutlookProcessId $ownedProcess.Id `
+                        -Mode $phase3Mode `
+                        -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds, 60)) `
+                        -SharedOperationIds $phase3OperationIds
+                    $phase3EndpointResults.Add($endpointResult)
+                    if ($cycle -eq 1) {
+                        $codexResult = & (Join-Path $PSScriptRoot 'test-phase3-codex.ps1') `
+                            -ExpectedStoreInventoryPath $ExpectedStoreInventoryPath `
+                            -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds + 30, 180)) `
+                            -SharedOperationIds $phase3OperationIds
+                        $phase3CodexResult = $codexResult
                     }
                 }
 
@@ -918,7 +955,12 @@ try {
                     CodexVerified = $null -ne $codexResult
                     PortReleaseMilliseconds = $portReleaseMilliseconds
                 })
-                Write-Host "Phase $ExpectedPhase smoke cycle $cycle/3 passed (PID $($ownedProcess.Id), session $sessionId)."
+                if ($ExpectedPhase -eq 3) {
+                    Write-Host "Phase 3 smoke cycle $cycle/3 passed."
+                }
+                else {
+                    Write-Host "Phase $ExpectedPhase smoke cycle $cycle/3 passed (PID $($ownedProcess.Id), session $sessionId)."
+                }
             }
             catch {
                 if (-not $normalCloseRequested) {
@@ -940,7 +982,56 @@ try {
         }
         if ($ExpectedPhase -ge 2 -and
             @($cycleResults | Where-Object CodexVerified).Count -ne 1) {
-            throw 'The Phase 2 gate did not complete exactly one Codex outlook_status probe.'
+            throw "The Phase $ExpectedPhase gate did not complete exactly one Codex probe."
+        }
+        if ($ExpectedPhase -eq 3) {
+            $readinessRetryCount = (
+                $phase3EndpointResults | Measure-Object -Property ReadinessRetryCount -Sum).Sum
+            $expectedOperationIdCount = 28 + $readinessRetryCount
+            if ($phase3EndpointResults.Count -ne 3 -or
+                $null -eq $phase3CodexResult -or
+                -not $phase3EndpointResults[0].FullWorkload -or
+                $phase3EndpointResults[1].FullWorkload -or
+                $phase3EndpointResults[2].FullWorkload -or
+                $phase3EndpointResults[0].SequentialProbeCount -ne 20 -or
+                $phase3EndpointResults[0].ConcurrentProbeCount -ne 4 -or
+                $phase3EndpointResults[1].RestartProbeCount -ne 1 -or
+                $phase3EndpointResults[2].RestartProbeCount -ne 1 -or
+                @($phase3EndpointResults | Where-Object {
+                    $_.ReadinessRetryCount -lt 0 -or $_.ReadinessRetryCount -gt 4
+                }).Count -ne 0 -or
+                $phase3OperationIds.Count -ne $expectedOperationIdCount) {
+                throw 'The Phase 3 endpoint and Codex workloads did not produce the required probe counts.'
+            }
+
+            $baselineEndpoint = $phase3EndpointResults[0]
+            foreach ($endpointEvidence in $phase3EndpointResults) {
+                if (-not $endpointEvidence.UniqueOperationIds -or
+                    -not $endpointEvidence.StoreInventoryMatched -or
+                    -not $endpointEvidence.StoreMetadataStable -or
+                    -not $endpointEvidence.DispatcherIdentityStable -or
+                    -not $endpointEvidence.AllProbeCallsOnCapturedSta -or
+                    -not $endpointEvidence.OutlookResponsive -or
+                    $endpointEvidence.StoreCount -ne $baselineEndpoint.StoreCount -or
+                    $endpointEvidence.StoreInventorySha256 -cne $baselineEndpoint.StoreInventorySha256 -or
+                    $endpointEvidence.ExpectedStoreInventorySha256 -cne $baselineEndpoint.ExpectedStoreInventorySha256 -or
+                    $endpointEvidence.StoreMetadataSha256 -cne $baselineEndpoint.StoreMetadataSha256 -or
+                    $endpointEvidence.EnvironmentSha256 -cne $baselineEndpoint.EnvironmentSha256) {
+                    throw 'Phase 3 probe evidence changed across Outlook restart cycles.'
+                }
+            }
+            if (-not $phase3CodexResult.UniqueOperationIds -or
+                -not $phase3CodexResult.StoreInventoryMatched -or
+                -not $phase3CodexResult.AllProbeCallsOnCapturedSta -or
+                -not $phase3CodexResult.ResultValidated -or
+                -not $phase3CodexResult.ProcessTreeClosed -or
+                $phase3CodexResult.StoreCount -ne $baselineEndpoint.StoreCount -or
+                $phase3CodexResult.StoreInventorySha256 -cne $baselineEndpoint.StoreInventorySha256 -or
+                $phase3CodexResult.ExpectedStoreInventorySha256 -cne $baselineEndpoint.ExpectedStoreInventorySha256 -or
+                $phase3CodexResult.StoreMetadataSha256 -cne $baselineEndpoint.StoreMetadataSha256 -or
+                $phase3CodexResult.EnvironmentSha256 -cne $baselineEndpoint.EnvironmentSha256) {
+                throw 'The Codex outlook_probe evidence did not match the raw Phase 3 evidence.'
+            }
         }
 
         Start-Sleep -Seconds 2
@@ -1075,6 +1166,73 @@ try {
         ($cycleResults | Measure-Object -Property PortReleaseMilliseconds -Maximum).Maximum
     if ($maximumPortReleaseMilliseconds -ge 3000) {
         throw "The maximum loopback port-release time was $maximumPortReleaseMilliseconds ms; expected less than 3000 ms."
+    }
+
+    if ($ExpectedPhase -eq 3) {
+        $operationSet = Get-Phase3StringMultiset -Entries ([string[]]@($phase3OperationIds))
+        $baselineEndpoint = $phase3EndpointResults[0]
+        $readinessRetryCount = (
+            $phase3EndpointResults | Measure-Object -Property ReadinessRetryCount -Sum).Sum
+        $expectedOperationIdCount = 28 + $readinessRetryCount
+        [pscustomobject]@{
+            Phase = 3
+            VerifiedCycleCount = $cycleResults.Count
+            DistinctOutlookProcessCount = @(
+                $cycleResults | Select-Object -ExpandProperty ProcessId -Unique).Count
+            DistinctDiagnosticSessionCount = @(
+                $cycleResults | Select-Object -ExpandProperty SessionId -Unique).Count
+            EndpointVerificationCount = $phase3EndpointResults.Count
+            FullEndpointWorkloadCount = 1
+            ToolCount = 2
+            StatusCallCount = 1
+            SequentialProbeCount = $phase3EndpointResults[0].SequentialProbeCount
+            ConcurrentProbeCount = $phase3EndpointResults[0].ConcurrentProbeCount
+            RestartProbeCount = (
+                $phase3EndpointResults[1].RestartProbeCount +
+                $phase3EndpointResults[2].RestartProbeCount)
+            ReadinessRetryCount = $readinessRetryCount
+            RawProbeCallCount = (
+                $phase3EndpointResults[0].ProbeResultCount +
+                $phase3EndpointResults[1].ProbeResultCount +
+                $phase3EndpointResults[2].ProbeResultCount)
+            CodexProbeCallCount = $phase3CodexResult.McpToolCallCount
+            TotalProbeCallCount = (
+                $phase3EndpointResults[0].ProbeResultCount +
+                $phase3EndpointResults[1].ProbeResultCount +
+                $phase3EndpointResults[2].ProbeResultCount +
+                $phase3CodexResult.McpToolCallCount)
+            StructuredEnvelopeCount = $phase3OperationIds.Count
+            UniqueOperationIdCount = $phase3OperationIds.Count
+            UniqueOperationIds = $phase3OperationIds.Count -eq $expectedOperationIdCount
+            OperationIdSetSha256 = $operationSet.Sha256
+            StoreCount = $baselineEndpoint.StoreCount
+            StoreInventoryMatched = $true
+            StoreInventorySha256 = $baselineEndpoint.StoreInventorySha256
+            ExpectedStoreInventorySha256 = $baselineEndpoint.ExpectedStoreInventorySha256
+            StoreMetadataStable = $true
+            StoreMetadataSha256 = $baselineEndpoint.StoreMetadataSha256
+            EnvironmentSha256 = $baselineEndpoint.EnvironmentSha256
+            DispatcherIdentityStable = $true
+            AllProbeCallsOnCapturedSta = $true
+            OutlookResponsiveCheckCount = (
+                $phase3EndpointResults[0].OutlookResponsiveCheckCount +
+                $phase3EndpointResults[1].OutlookResponsiveCheckCount +
+                $phase3EndpointResults[2].OutlookResponsiveCheckCount)
+            OutlookResponsive = $true
+            LifecycleDiagnosticEventCount = $verificationResult.VerifiedEventCount
+            StartupCallbackUnderLimitCount = $verificationResult.StartupCallbackUnderLimitCount
+            DispatcherLifecycleThreadMatchCount = $verificationResult.DispatcherThreadMatchCount
+            RuntimeIdentitySha256 = $verificationResult.RuntimeIdentitySha256
+            Event45RecordCount = $cycleResults.Count
+            Event59RecordCount = 0
+            ResiliencyStateUnchanged = $true
+            OutlookStopped = $true
+            PortReleasedWithinThreeSeconds = $true
+            CodexVerified = $true
+            RegistrationRemoved = $true
+            TemporaryCertificateRemoved = $true
+        }
+        return
     }
 
     [pscustomobject]@{

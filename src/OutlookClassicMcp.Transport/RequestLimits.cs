@@ -4,6 +4,8 @@ namespace OutlookClassicMcp.Transport
     {
         public static readonly System.TimeSpan DefaultHandlerDeadline =
             System.TimeSpan.FromSeconds(15);
+        public static readonly System.TimeSpan DefaultToolDeadline =
+            System.TimeSpan.FromSeconds(14);
 
         public const int MaximumHeaderFields = 64;
         public const int MaximumHeaderCharacters = 16 * 1024;

@@ -25,6 +25,7 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="System.Windows.Forms" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookErrorMapper.cs" Link="AddInRuntime\OutlookErrorMapper.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookStaDispatcher.cs" Link="AddInRuntime\OutlookStaDispatcher.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookThreadContext.cs" Link="AddInRuntime\OutlookThreadContext.cs" />
   </ItemGroup>

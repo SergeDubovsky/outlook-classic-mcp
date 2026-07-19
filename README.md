@@ -2,7 +2,7 @@
 
 An open-source, brokerless VSTO add-in that exposes the stores in an active Classic Outlook profile through an authenticated local Model Context Protocol endpoint.
 
-Phases 0, 1, and 2 are complete. The authenticated MCP listener and its mailbox-free status surface have passed automated, live Outlook, and live Codex acceptance. Mailbox-reading and write tools remain unavailable.
+Phases 0 through 3 are complete. The authenticated MCP listener, mailbox-free status surface, and bounded Outlook store probe have passed automated, live Outlook, and live Codex acceptance. Message-reading and write tools remain unavailable.
 
 ## Security boundary
 
@@ -28,7 +28,7 @@ The production system uses three assemblies in one `OUTLOOK.EXE` process:
 
 There is no service, background broker, Graph, EWS, IMAP, or connector fallback.
 
-Phase 2 uses the pinned `ModelContextProtocol.Core` 1.4.1 SDK in stateless Streamable HTTP mode. The implemented protocol surface is initialization, the initialized notification, ping, tool discovery, and calls to the single `outlook_status` tool. That tool returns only bounded host state, listener readiness, and add-in version; it does not enumerate profiles, stores, folders, messages, or attachments.
+The pinned `ModelContextProtocol.Core` 1.4.1 SDK runs in stateless Streamable HTTP mode. The implemented protocol surface is initialization, the initialized notification, ping, tool discovery, and calls to exactly two tools: `outlook_status` and `outlook_probe`. Status returns bounded managed host state. Probe dispatches synchronously onto the captured Outlook UI STA and returns bounded Outlook version, profile, store capability, and standard-folder availability metadata as immutable managed data. It does not read messages, bodies, attachments, or store identifiers.
 
 ## Prerequisites
 
@@ -56,21 +56,19 @@ Routine builds are isolated: they refuse to overwrite an existing same-name VSTO
 
 The completed Phase 1 lifecycle acceptance is preserved in [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md). It is no longer a current runnable gate: the Phase 2 add-in always attempts authenticated listener startup, so Phase 1 mode in the historical lifecycle runner and verifier is explicitly retired.
 
-Run the current Phase 2 live gate against a dedicated Outlook profile with:
+Prepare an independent store inventory as described in [the Phase 3 smoke instructions](smoke/outlook/README.md), then run the current live gate against a dedicated Outlook profile with:
 
 ```powershell
-.\tools\run-phase2-smoke.ps1 -Profile Outlook
+.\tools\run-phase3-smoke.ps1 `
+    -Profile '<dedicated test profile>' `
+    -ExpectedStoreInventoryPath '<independently prepared inventory file>'
 ```
 
-Provision the current-user token first, save work, and close Outlook gracefully before running it. The runner uses the installed Visual Studio toolchain only through `MSBuild.exe` and its OfficeTools targets; it does not launch the Visual Studio IDE. It creates a temporary Release VSTO registration, runs three normal Outlook start/close cycles, checks Outlook Event IDs 45 and 59 together with the lifecycle metadata verifier, and removes its temporary registration and certificate. It never force-terminates Outlook.
+Provision the current-user token first, save work, and close Outlook gracefully before running it. The runner uses the installed Visual Studio toolchain only through `MSBuild.exe` and its OfficeTools targets; it does not launch the Visual Studio IDE. It creates a temporary Release VSTO registration, runs three normal Outlook start/close cycles, checks Outlook Event IDs 45 and 59 together with lifecycle metadata, and removes its temporary registration and certificate. It never force-terminates Outlook.
 
-The gate checks the unauthenticated failure, initialize/initialized, ping, `tools/list`, the single `outlook_status` call, and port release after normal Outlook shutdown. The endpoint-only CLI probe can also be run while a Phase 2 listener is online:
+The gate checks the unauthenticated failure, initialize/initialized, ping, exact two-tool discovery, status, twenty sequential probes, four concurrent probes, one native Codex probe, post-restart probes, independent store-inventory agreement, UI-STA execution, Outlook responsiveness, and clean port release. Only the first probe after each listener start may retry an exact metadata-incomplete partial result, with at most five attempts and a 30-second total deadline. Every later probe is single-shot and fail-closed.
 
-```powershell
-.\tools\test-phase2-endpoint.ps1
-```
-
-The final three-cycle Outlook and Codex acceptance run passed on 2026-07-19. See [Phase 2 evidence](docs/PHASE_2_EVIDENCE.md) for the recorded results.
+The final three-cycle Outlook and Codex acceptance run passed on 2026-07-19. See [Phase 3 evidence](docs/PHASE_3_EVIDENCE.md) for the recorded results.
 
 ## Codex development configuration
 
@@ -88,7 +86,7 @@ After reviewing the security boundary above, generate or retain a 256-bit token 
 
 Restart Outlook and Codex whenever the token is installed, rotated, or cleared, then rerun `-Action Validate`. `-Action Rotate` replaces the current-user token; only newly started Outlook and Codex processes inherit the replacement. The committed `.codex/config.toml` is repository-scoped, uses the exact endpoint and `OUTLOOK_MCP_TOKEN`, and is loaded only when this checkout is trusted. Global user registration remains intentionally deferred.
 
-The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_status` successfully against a running Outlook instance and receive an online, ready result.
+The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_probe` exactly once against a running Outlook instance. A deterministic validator accepted its native structured result without retaining profile or store labels.
 
 ## Documentation
 
@@ -100,6 +98,7 @@ The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_status` suc
 - [Phase 0 evidence](docs/PHASE_0_EVIDENCE.md)
 - [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md)
 - [Phase 2 evidence](docs/PHASE_2_EVIDENCE.md)
+- [Phase 3 evidence](docs/PHASE_3_EVIDENCE.md)
 - [Dependency licenses](docs/DEPENDENCY_LICENSES.md)
 - [Security policy](SECURITY.md)
 

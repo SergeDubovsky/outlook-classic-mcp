@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using NUnit.Framework;
+using OutlookClassicMcp.Core.Outlook;
 
 namespace OutlookClassicMcp.Transport.Tests
 {
@@ -29,7 +30,8 @@ namespace OutlookClassicMcp.Transport.Tests
         private static readonly string[] IdentityEncoding = { "identity" };
         private static readonly string[] StatusDataProperties =
             { "hostState", "listenerReady", "version" };
-        private static readonly string[] StatusToolName = { "outlook_status" };
+        private static readonly string[] PhaseThreeToolNames =
+            { "outlook_status", "outlook_probe" };
 
         [Test]
         public async Task UnauthorizedResponsesAreIndistinguishableAcrossRawForms()
@@ -251,7 +253,7 @@ namespace OutlookClassicMcp.Transport.Tests
         }
 
         [Test]
-        public async Task ToolListAndStatusExposeOnlyBoundedPhaseTwoData()
+        public async Task ToolListAndStatusExposeOnlyBoundedPhaseThreeData()
         {
             using (var server = CreateServer(TokenText))
             using (var client = CreateHttpClient())
@@ -265,8 +267,9 @@ namespace OutlookClassicMcp.Transport.Tests
                 using (var payload = ParseSingleSsePayload(list.Body))
                 {
                     var tools = payload.RootElement.GetProperty("result").GetProperty("tools");
-                    Assert.That(tools.GetArrayLength(), Is.EqualTo(1));
+                    Assert.That(tools.GetArrayLength(), Is.EqualTo(2));
                     Assert.That(tools[0].GetProperty("name").GetString(), Is.EqualTo("outlook_status"));
+                    Assert.That(tools[1].GetProperty("name").GetString(), Is.EqualTo("outlook_probe"));
                 }
 
                 var status = await SendJsonAsync(
@@ -291,6 +294,214 @@ namespace OutlookClassicMcp.Transport.Tests
                     Assert.That(data.EnumerateObject().Select(property => property.Name),
                         Is.EquivalentTo(StatusDataProperties));
                 }
+            }
+        }
+
+        [Test]
+        public async Task TwentySequentialProbeCallsPreserveIdsAndKeepTheListenerHealthy()
+        {
+            var gateway = new FakeOutlookGateway();
+            using (var server = CreateServer(
+                TokenText,
+                () => new OutlookStatusSnapshot("online", listenerReady: true, "1.0.0"),
+                gateway))
+            using (var client = CreateHttpClient())
+            {
+                server.Start();
+                for (var index = 0; index < 20; index++)
+                {
+                    var id = 40 + index;
+                    var response = await SendJsonAsync(
+                        client,
+                        ProbeRequest(id),
+                        ValidAuthorization(TokenText));
+                    AssertSseResponse(response, id);
+                    using (var payload = ParseSingleSsePayload(response.Body))
+                    {
+                        var result = payload.RootElement.GetProperty("result");
+                        Assert.That(result.GetProperty("isError").GetBoolean(), Is.False);
+                        Assert.That(
+                            result.GetProperty("structuredContent").GetProperty("data")
+                                .GetProperty("dispatcher").GetProperty("matchesCapturedThread")
+                                .GetBoolean(),
+                            Is.True);
+                    }
+                }
+
+                Assert.That(gateway.CallCount, Is.EqualTo(20));
+                Assert.That(server.IsListening, Is.True);
+                Assert.That(server.ActiveHandlerCount, Is.Zero);
+            }
+        }
+
+        [Test]
+        public async Task FourConcurrentProbeCallsAreBoundedAndComplete()
+        {
+            using (var entered = new CountdownEvent(4))
+            {
+                var release = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var activeCalls = 0;
+                var maximumActiveCalls = 0;
+                var gateway = new FakeOutlookGateway(async cancellationToken =>
+                {
+                    var active = Interlocked.Increment(ref activeCalls);
+                    UpdateMaximum(ref maximumActiveCalls, active);
+                    entered.Signal();
+                    try
+                    {
+                        await release.Task;
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return ProbeTestData.CreateSnapshot();
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref activeCalls);
+                    }
+                });
+                using (var server = CreateServer(
+                    TokenText,
+                    () => new OutlookStatusSnapshot("online", listenerReady: true, "1.0.0"),
+                    gateway))
+                using (var client = CreateHttpClient())
+                {
+                    server.Start();
+                    var calls = Enumerable.Range(0, 4)
+                        .Select(index => SendJsonAsync(
+                            client,
+                            ProbeRequest(70 + index),
+                            ValidAuthorization(TokenText)))
+                        .ToArray();
+                    try
+                    {
+                        Assert.That(entered.Wait(RequestTimeout), Is.True);
+                    }
+                    finally
+                    {
+                        release.TrySetResult(true);
+                    }
+
+                    var responses = await Task.WhenAll(calls);
+                    for (var index = 0; index < responses.Length; index++)
+                    {
+                        AssertSseResponse(responses[index], 70 + index);
+                    }
+
+                    Assert.That(maximumActiveCalls, Is.EqualTo(4));
+                    Assert.That(server.ActiveHandlerCount, Is.Zero);
+                }
+            }
+        }
+
+        [Test]
+        public async Task ProbeFailureIsAProtocolSuccessAndTheNextProbeRecovers()
+        {
+            var calls = 0;
+            var gateway = new FakeOutlookGateway(_ =>
+            {
+                calls++;
+                return calls == 1
+                    ? Task.FromException<OutlookProbeSnapshot>(
+                        new OutlookGatewayException(OutlookGatewayFailure.ComBusy))
+                    : Task.FromResult(ProbeTestData.CreateSnapshot());
+            });
+            using (var server = CreateServer(
+                TokenText,
+                () => new OutlookStatusSnapshot("online", listenerReady: true, "1.0.0"),
+                gateway))
+            using (var client = CreateHttpClient())
+            {
+                server.Start();
+                var failed = await SendJsonAsync(
+                    client,
+                    ProbeRequest(80),
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(failed, 80);
+                using (var payload = ParseSingleSsePayload(failed.Body))
+                {
+                    var result = payload.RootElement.GetProperty("result");
+                    Assert.That(result.GetProperty("isError").GetBoolean(), Is.True);
+                    Assert.That(
+                        result.GetProperty("structuredContent").GetProperty("error")
+                            .GetProperty("code").GetString(),
+                        Is.EqualTo("COM_BUSY"));
+                }
+
+                var recovered = await SendJsonAsync(
+                    client,
+                    ProbeRequest(81),
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(recovered, 81);
+                using (var payload = ParseSingleSsePayload(recovered.Body))
+                {
+                    Assert.That(
+                        payload.RootElement.GetProperty("result").GetProperty("isError").GetBoolean(),
+                        Is.False);
+                }
+
+                Assert.That(server.IsListening, Is.True);
+                Assert.That(gateway.CallCount, Is.EqualTo(2));
+            }
+        }
+
+        [Test]
+        public async Task InnerProbeDeadlineReturnsTimeoutAndObservesAnIgnoringGatewayBeforeRecovery()
+        {
+            var pending = new TaskCompletionSource<OutlookProbeSnapshot>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            var gateway = new FakeOutlookGateway(_ =>
+            {
+                var call = Interlocked.Increment(ref calls);
+                return call == 1
+                    ? pending.Task
+                    : Task.FromResult(ProbeTestData.CreateSnapshot());
+            });
+            Assert.That(BearerToken.TryCreate(TokenText, out var token), Is.True);
+            using (var server = new LoopbackHttpServer(
+                token,
+                () => new OutlookStatusSnapshot("online", listenerReady: true, "1.0.0"),
+                gateway,
+                TimeSpan.FromMilliseconds(150),
+                TimeSpan.FromSeconds(2)))
+            using (var client = CreateHttpClient())
+            {
+                server.Start();
+                var timedOut = await SendJsonAsync(
+                    client,
+                    ProbeRequest(82),
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(timedOut, 82);
+                using (var payload = ParseSingleSsePayload(timedOut.Body))
+                {
+                    var result = payload.RootElement.GetProperty("result");
+                    Assert.That(result.GetProperty("isError").GetBoolean(), Is.True);
+                    var error = result.GetProperty("structuredContent").GetProperty("error");
+                    Assert.That(error.GetProperty("code").GetString(), Is.EqualTo("TIMEOUT"));
+                    Assert.That(error.GetProperty("retryable").GetBoolean(), Is.True);
+                }
+
+                Assert.That(pending.Task.IsCompleted, Is.False);
+                Assert.That(gateway.LastCancellationToken.IsCancellationRequested, Is.True);
+                pending.TrySetException(new InvalidOperationException(
+                    "eventual sensitive gateway detail"));
+
+                var recovered = await SendJsonAsync(
+                    client,
+                    ProbeRequest(83),
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(recovered, 83);
+                using (var payload = ParseSingleSsePayload(recovered.Body))
+                {
+                    Assert.That(
+                        payload.RootElement.GetProperty("result").GetProperty("isError").GetBoolean(),
+                        Is.False);
+                    Assert.That(payload.RootElement.GetRawText(),
+                        Does.Not.Contain("eventual sensitive gateway detail"));
+                }
+
+                Assert.That(server.IsListening, Is.True);
+                Assert.That(gateway.CallCount, Is.EqualTo(2));
             }
         }
 
@@ -440,6 +651,8 @@ namespace OutlookClassicMcp.Transport.Tests
             using (var server = new LoopbackHttpServer(
                 token,
                 () => new OutlookStatusSnapshot("online", listenerReady: true, "1.0.0"),
+                new FakeOutlookGateway(),
+                TimeSpan.FromSeconds(1),
                 TimeSpan.FromSeconds(2)))
             using (var client = CreateHttpClient())
             {
@@ -550,7 +763,8 @@ namespace OutlookClassicMcp.Transport.Tests
                 using (var firstToken = BearerToken.LoadFromProcessEnvironment())
                 using (var first = new LoopbackHttpServer(
                     firstToken,
-                    () => new OutlookStatusSnapshot("online", true, "1.0.0")))
+                    () => new OutlookStatusSnapshot("online", true, "1.0.0"),
+                    new FakeOutlookGateway()))
                 using (var client = CreateHttpClient())
                 {
                     first.Start();
@@ -574,7 +788,8 @@ namespace OutlookClassicMcp.Transport.Tests
                 using (var secondToken = BearerToken.LoadFromProcessEnvironment())
                 using (var second = new LoopbackHttpServer(
                     secondToken,
-                    () => new OutlookStatusSnapshot("online", true, "1.0.0")))
+                    () => new OutlookStatusSnapshot("online", true, "1.0.0"),
+                    new FakeOutlookGateway()))
                 using (var client = CreateHttpClient())
                 {
                     second.Start();
@@ -600,7 +815,7 @@ namespace OutlookClassicMcp.Transport.Tests
         }
 
         [Test]
-        public async Task PinnedMcpClientInitializesPingsListsAndCallsStatus()
+        public async Task PinnedMcpClientInitializesPingsListsAndCallsPhaseThreeTools()
         {
             using (var server = CreateServer(TokenText))
             using (var httpClient = CreateHttpClient())
@@ -639,7 +854,7 @@ namespace OutlookClassicMcp.Transport.Tests
                             new ListToolsRequestParams(),
                             cancellation.Token);
                         Assert.That(tools.Tools.Select(tool => tool.Name),
-                            Is.EqualTo(StatusToolName));
+                            Is.EqualTo(PhaseThreeToolNames));
 
                         var status = await client.CallToolAsync(
                             new CallToolRequestParams
@@ -654,6 +869,21 @@ namespace OutlookClassicMcp.Transport.Tests
                             status.StructuredContent!.Value.GetProperty("data")
                                 .GetProperty("hostState").GetString(),
                             Is.EqualTo("online"));
+
+                        var probe = await client.CallToolAsync(
+                            new CallToolRequestParams
+                            {
+                                Name = "outlook_probe",
+                                Arguments = new Dictionary<string, JsonElement>(),
+                            },
+                            cancellation.Token);
+                        Assert.That(probe.IsError, Is.False);
+                        Assert.That(probe.StructuredContent.HasValue, Is.True);
+                        Assert.That(
+                            probe.StructuredContent!.Value.GetProperty("data")
+                                .GetProperty("dispatcher").GetProperty("matchesCapturedThread")
+                                .GetBoolean(),
+                            Is.True);
                     }
                 }
                 finally
@@ -681,8 +911,16 @@ namespace OutlookClassicMcp.Transport.Tests
             string encodedToken,
             Func<OutlookStatusSnapshot> statusProvider)
         {
+            return CreateServer(encodedToken, statusProvider, new FakeOutlookGateway());
+        }
+
+        private static LoopbackHttpServer CreateServer(
+            string encodedToken,
+            Func<OutlookStatusSnapshot> statusProvider,
+            IOutlookGateway outlookGateway)
+        {
             Assert.That(BearerToken.TryCreate(encodedToken, out var token), Is.True);
-            return new LoopbackHttpServer(token, statusProvider);
+            return new LoopbackHttpServer(token, statusProvider, outlookGateway);
         }
 
         private static HttpClient CreateHttpClient()
@@ -858,6 +1096,12 @@ namespace OutlookClassicMcp.Transport.Tests
                 "\"name\":\"outlook_status\",\"arguments\":{}}}";
         }
 
+        private static string ProbeRequest(int id)
+        {
+            return $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{" +
+                "\"name\":\"outlook_probe\",\"arguments\":{}}}";
+        }
+
         private static string ValidAuthorization(string token)
         {
             return "Bearer " + token;
@@ -890,6 +1134,21 @@ namespace OutlookClassicMcp.Transport.Tests
             }
 
             return condition();
+        }
+
+        private static void UpdateMaximum(ref int maximum, int value)
+        {
+            var current = Volatile.Read(ref maximum);
+            while (value > current)
+            {
+                var observed = Interlocked.CompareExchange(ref maximum, value, current);
+                if (observed == current)
+                {
+                    return;
+                }
+
+                current = observed;
+            }
         }
 
         private sealed class HttpResult

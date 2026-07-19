@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "source": "classic-outlook-ui",
+  "stores": [
+    {
+      "displayName": "REPLACE WITH THE EXACT CLASSIC OUTLOOK STORE NAME",
+      "storeType": "primaryExchangeMailbox"
+    }
+  ]
+}

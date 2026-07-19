@@ -6,6 +6,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using OutlookClassicMcp.Core.Outlook;
 
 namespace OutlookClassicMcp.Transport
 {
@@ -44,14 +45,22 @@ namespace OutlookClassicMcp.Transport
 
         public LoopbackHttpServer(
             BearerToken bearerToken,
-            Func<OutlookStatusSnapshot> statusProvider)
-            : this(bearerToken, statusProvider, RequestLimits.DefaultHandlerDeadline)
+            Func<OutlookStatusSnapshot> statusProvider,
+            IOutlookGateway outlookGateway)
+            : this(
+                bearerToken,
+                statusProvider,
+                outlookGateway,
+                RequestLimits.DefaultToolDeadline,
+                RequestLimits.DefaultHandlerDeadline)
         {
         }
 
         internal LoopbackHttpServer(
             BearerToken bearerToken,
             Func<OutlookStatusSnapshot> statusProvider,
+            IOutlookGateway outlookGateway,
+            TimeSpan toolDeadline,
             TimeSpan handlerDeadline)
         {
             if (handlerDeadline <= TimeSpan.Zero ||
@@ -60,10 +69,17 @@ namespace OutlookClassicMcp.Transport
                 throw new ArgumentOutOfRangeException(nameof(handlerDeadline));
             }
 
+            if (toolDeadline <= TimeSpan.Zero || toolDeadline >= handlerDeadline)
+            {
+                throw new ArgumentOutOfRangeException(nameof(toolDeadline));
+            }
+
             _bearerToken = bearerToken ?? throw new ArgumentNullException(nameof(bearerToken));
             _validator = new HttpRequestValidator(bearerToken);
             _adapter = new McpRequestAdapter(
-                statusProvider ?? throw new ArgumentNullException(nameof(statusProvider)));
+                statusProvider ?? throw new ArgumentNullException(nameof(statusProvider)),
+                outlookGateway ?? throw new ArgumentNullException(nameof(outlookGateway)),
+                toolDeadline);
             _listener = new HttpListener();
             _listener.Prefixes.Add(LoopbackEndpoint.Prefix);
             _handlerDeadline = handlerDeadline;
