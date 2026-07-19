@@ -2,7 +2,7 @@
 
 ## Implementation plan and repository handoff
 
-Status: Phase 0 complete; Phase 1 not started
+Status: Phases 0-1 complete; Phase 2 not started
 Plan version: 1.1
 Prepared: 2026-07-14
 Target: Windows x64, Classic Outlook, one active Outlook profile, local Codex clients
@@ -278,7 +278,7 @@ Never synchronously drain the STA queue or wait on a handler from an Outlook shu
 These are implementation invariants, not suggestions:
 
 - Inject and use `ThisAddIn.Application`; never call `new Outlook.Application()`.
-- Do not assume `SynchronizationContext.Current` is usable. Start with a hidden WinForms `Control` created on Outlook’s startup thread and use `BeginInvoke`.
+- Do not assume `SynchronizationContext.Current` is usable. Create a hidden WinForms `Control` on Outlook’s startup thread. Phase 1 rapid-restart evidence superseded the initial `BeginInvoke` wake-up choice with the event-driven private-window-message design in [ADR 0001](ADR_0001_STA_DISPATCH_WAKEUP.md).
 - Capture and assert the Outlook thread ID in integration tests.
 - HTTP work may parse and authenticate on worker threads, but every Outlook operation is a synchronous `Func<TDto>` dispatched onto the STA.
 - Never use `Task.Run` for Outlook COM work and never `await` inside a delegate holding an Outlook RCW.

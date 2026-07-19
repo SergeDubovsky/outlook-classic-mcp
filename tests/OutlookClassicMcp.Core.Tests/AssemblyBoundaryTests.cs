@@ -28,5 +28,16 @@ namespace OutlookClassicMcp.Core.Tests
 
             Assert.That(prohibited, Is.Empty);
         }
+
+        [Test]
+        public void NormalTestHostDoesNotLoadTheVstoAddIn()
+        {
+            var loadedAssemblyNames = AppDomain.CurrentDomain
+                .GetAssemblies()
+                .Select(assembly => assembly.GetName().Name ?? string.Empty)
+                .ToArray();
+
+            Assert.That(loadedAssemblyNames, Does.Not.Contain("OutlookClassicMcp.AddIn"));
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 An open-source, brokerless VSTO add-in that exposes the stores in an active Classic Outlook profile through an authenticated local Model Context Protocol endpoint.
 
-Phase 0 is complete: the repository, toolchain, stock-template F5 path, public Windows CI, and runtime feasibility are proven. Phase 1 has not started, and mailbox-reading and write tools are not enabled yet.
+Phases 0 and 1 are complete: the repository/toolchain, stock-template F5 path, public Windows CI, dependency closure, Outlook STA dispatcher, and repeatable add-in lifecycle are proven. The MCP listener, mailbox-reading tools, and write tools are not enabled yet.
 
 ## Security boundary
 
@@ -50,6 +50,14 @@ Save work and close Outlook gracefully before the build; never terminate it forc
 
 Routine builds are isolated: they refuse to overwrite an existing same-name VSTO development registration and remove their own temporary Outlook registration, certificate, and private-key container. Visual Studio registration and F5 debugging remain a separate interactive workflow.
 
+Run the Phase 1 lifecycle gate against a dedicated Outlook profile with:
+
+```powershell
+.\tools\run-phase1-smoke.ps1 -Profile Outlook
+```
+
+The runner uses the installed Visual Studio toolchain only through `MSBuild.exe` and its OfficeTools targets; it does not launch the Visual Studio IDE. It creates a temporary Release VSTO registration, runs three normal Outlook start/close cycles, checks Outlook Event IDs 45 and 59 together with the metadata verifier, and removes its temporary registration and certificate. It never force-terminates Outlook.
+
 ## Codex development configuration
 
 The reviewed repository-scoped configuration is loaded only when this checkout is trusted by Codex. Validate it without changing the environment:
@@ -64,9 +72,11 @@ After reviewing the security boundary above, generate or retain a 256-bit token 
 
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [STA dispatcher wake-up decision](docs/ADR_0001_STA_DISPATCH_WAKEUP.md)
 - [Tool contracts](docs/TOOL_CONTRACTS.md)
 - [Testing](docs/TESTING.md)
 - [Phase 0 evidence](docs/PHASE_0_EVIDENCE.md)
+- [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md)
 - [Dependency licenses](docs/DEPENDENCY_LICENSES.md)
 - [Security policy](SECURITY.md)
 

@@ -1,23 +1,31 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Xml.Linq;
-using Outlook = Microsoft.Office.Interop.Outlook;
-using Office = Microsoft.Office.Core;
+using System.Diagnostics;
+using OutlookClassicMcp.AddIn.Runtime;
 
 namespace OutlookClassicMcp.AddIn
 {
     public partial class ThisAddIn
     {
+        private AddInHost? _host;
+
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
+            var started = Stopwatch.GetTimestamp();
+            try
+            {
+                var host = new AddInHost(Application);
+                _host = host;
+                host.Start(started);
+            }
+            catch
+            {
+                // Startup failures must not destabilize Outlook.
+            }
         }
 
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
         {
-            // Note: Outlook no longer raises this event. If you have code that
-            //    must run when Outlook shuts down, see https://go.microsoft.com/fwlink/?LinkId=506785
+            _ = _host?.BeginShutdown();
         }
 
         #region VSTO generated code

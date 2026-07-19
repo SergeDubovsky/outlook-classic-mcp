@@ -17,4 +17,15 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OutlookClassicMcp.Core\OutlookClassicMcp.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\HostLifecycle.cs" Link="AddInRuntime\HostLifecycle.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\HostLifecycleState.cs" Link="AddInRuntime\HostLifecycleState.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Windows.Forms" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookStaDispatcher.cs" Link="AddInRuntime\OutlookStaDispatcher.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookThreadContext.cs" Link="AddInRuntime\OutlookThreadContext.cs" />
+  </ItemGroup>
 </Project>

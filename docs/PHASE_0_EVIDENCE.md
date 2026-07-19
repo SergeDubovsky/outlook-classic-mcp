@@ -81,4 +81,4 @@ The current desktop permission profile does not prove an unavoidable prompt beca
 
 ## Phase 0 completion
 
-All Phase 0 acceptance gates are complete. Phase 1 has not started. Node 22 installation remains intentionally deferred; Inspector/conformance is not an early-phase gate.
+All Phase 0 acceptance gates are complete. Phase 1 lifecycle work was subsequently completed; see `PHASE_1_EVIDENCE.md`. Node 22 installation remains intentionally deferred; Inspector/conformance is not an early-phase gate.

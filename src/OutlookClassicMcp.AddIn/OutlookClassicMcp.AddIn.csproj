@@ -106,6 +106,7 @@
     <Reference Include="System" />
     <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.Security" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Core" />
@@ -222,6 +223,12 @@
       <AutoGen>True</AutoGen>
       <DependentUpon>Settings.settings</DependentUpon>
     </Compile>
+    <Compile Include="Runtime\HostLifecycle.cs" />
+    <Compile Include="Runtime\HostLifecycleState.cs" />
+    <Compile Include="Runtime\AddInHost.cs" />
+    <Compile Include="Runtime\MetadataDiagnostics.cs" />
+    <Compile Include="Runtime\OutlookStaDispatcher.cs" />
+    <Compile Include="Runtime\OutlookThreadContext.cs" />
     <Compile Include="ThisAddIn.cs">
       <SubType>Code</SubType>
     </Compile>

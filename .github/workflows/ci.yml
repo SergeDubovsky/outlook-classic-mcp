@@ -128,6 +128,10 @@ jobs:
         shell: pwsh
         run: .\tools\build.ps1 -Configuration Release
 
+      - name: Verify MCP runtime deployment
+        shell: pwsh
+        run: .\tools\verify-mcp-runtime-assets.ps1 -Configuration Release
+
       - name: Verify generated VSTO files
         shell: pwsh
         run: .\tools\verify-generated-files.ps1
