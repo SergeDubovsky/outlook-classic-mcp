@@ -41,7 +41,16 @@ namespace OutlookClassicMcp.AddIn.Runtime
 
         public bool TryMarkDegraded()
         {
-            return TryTransition(HostLifecycleState.Starting, HostLifecycleState.Degraded);
+            lock (_gate)
+            {
+                if (_state != HostLifecycleState.Starting && _state != HostLifecycleState.Online)
+                {
+                    return false;
+                }
+
+                _state = HostLifecycleState.Degraded;
+                return true;
+            }
         }
 
         public bool TryBeginPause()

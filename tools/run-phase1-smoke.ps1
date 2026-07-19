@@ -9,11 +9,20 @@ param(
     [int]$StartupTimeoutSeconds = 60,
 
     [ValidateRange(15, 180)]
-    [int]$ShutdownTimeoutSeconds = 60
+    [int]$ShutdownTimeoutSeconds = 60,
+
+    [ValidateSet(1, 2)]
+    [int]$ExpectedPhase = 1
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($ExpectedPhase -eq 1) {
+    throw (
+        'Phase 1 smoke mode is retired because the current add-in always starts the Phase 2 listener. ' +
+        'Run tools\run-phase2-smoke.ps1 instead; historical results remain in docs\PHASE_1_EVIDENCE.md.')
+}
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $addInProjectPath = Join-Path $repositoryRoot 'src\OutlookClassicMcp.AddIn\OutlookClassicMcp.AddIn.csproj'
@@ -165,7 +174,7 @@ function Assert-AddInLoggingEnabled {
             $kind = $key.GetValueKind($name)
             $value = $key.GetValue($name)
             if ($kind -ne [Microsoft.Win32.RegistryValueKind]::DWord -or $value -ne 0) {
-                throw 'Outlook add-in event logging is disabled or has an invalid policy value. Event ID 45 is required for the Phase 1 gate.'
+                throw 'Outlook add-in event logging is disabled or has an invalid policy value. Event ID 45 is required for the lifecycle smoke gate.'
             }
         }
         finally {
@@ -196,7 +205,7 @@ function Assert-AddInNotPolicyManaged {
 
     foreach ($location in $locations) {
         if (Test-RegistryValueName -Hive $location.Hive -SubKey $location.SubKey -ValueName $addInProgId) {
-            throw "The target add-in is managed by Outlook resiliency policy at $($location.Hive)\$($location.SubKey). Remove that test exception before running the Phase 1 gate."
+            throw "The target add-in is managed by Outlook resiliency policy at $($location.Hive)\$($location.SubKey). Remove that test exception before running the lifecycle smoke gate."
         }
     }
 }
@@ -667,17 +676,36 @@ function Close-OwnedOutlookAfterFailure {
     }
 }
 
+function Wait-ForLoopbackPortRelease {
+    param([Parameter(Mandatory = $true)][Diagnostics.Stopwatch]$Stopwatch)
+
+    do {
+        $listeners = @(Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)
+        if ($listeners.Count -eq 0) {
+            $elapsed = $Stopwatch.Elapsed
+            if ($elapsed -lt [TimeSpan]::FromSeconds(3)) {
+                return $elapsed.TotalMilliseconds
+            }
+
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    } while ($Stopwatch.Elapsed -lt [TimeSpan]::FromSeconds(3))
+
+    throw "TCP port 8765 remained bound for at least three seconds after Outlook close was requested."
+}
+
 if ($Profile.IndexOf('"') -ge 0 -or $Profile.IndexOf('\') -ge 0 -or $Profile -match '[\x00-\x1F]') {
     throw 'The Outlook profile name must not contain quotation marks, backslashes, or control characters.'
 }
 if (-not [Environment]::UserInteractive) {
-    throw 'The Phase 1 Outlook smoke gate requires an interactive logged-on Windows desktop.'
+    throw 'The Outlook lifecycle smoke gate requires an interactive logged-on Windows desktop.'
 }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'Run the Phase 1 Outlook smoke gate from a non-elevated PowerShell process.'
+    throw 'Run the Outlook lifecycle smoke gate from a non-elevated PowerShell process.'
 }
 if (-not (Test-Path -LiteralPath $outlookPath -PathType Leaf)) {
     throw "Classic Outlook was not found at $outlookPath"
@@ -723,7 +751,7 @@ $smokeCertificateResidue = @(
         Where-Object Subject -Like 'CN=OutlookClassicMcp Ephemeral Smoke *'
 )
 if ($smokeCertificateResidue.Count -gt 0) {
-    throw 'A certificate from an interrupted Phase 1 smoke run remains in a current-user certificate store.'
+    throw 'A certificate from an interrupted lifecycle smoke run remains in a current-user certificate store.'
 }
 
 $primaryFailure = $null
@@ -743,6 +771,14 @@ $cycleResults = [System.Collections.Generic.List[object]]::new()
 $smokeStartedUtc = $null
 $smokeFinishedUtc = $null
 $verificationResult = $null
+$previousOutlookMcpToken = [Environment]::GetEnvironmentVariable('OUTLOOK_MCP_TOKEN', 'Process')
+if ($ExpectedPhase -ge 2) {
+    $phaseToken = [Environment]::GetEnvironmentVariable('OUTLOOK_MCP_TOKEN', 'User')
+    if ($phaseToken -notmatch '^[A-Za-z0-9_-]{43}$') {
+        throw 'Phase 2 requires a canonical current-user OUTLOOK_MCP_TOKEN. Run tools\configure-codex.ps1 -Action Install first.'
+    }
+    [Environment]::SetEnvironmentVariable('OUTLOOK_MCP_TOKEN', $phaseToken, 'Process')
+}
 
 Push-Location $repositoryRoot
 try {
@@ -819,10 +855,23 @@ try {
                     -DeadlineUtc $startupDeadline
                 Wait-ForOutlookMainWindow -Process $ownedProcess -DeadlineUtc $startupDeadline
 
+                $endpointResult = $null
+                $codexResult = $null
+                if ($ExpectedPhase -ge 2) {
+                    $endpointResult = & (Join-Path $PSScriptRoot 'test-phase2-endpoint.ps1') `
+                        -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds, 60))
+                    if ($cycle -eq 1) {
+                        $codexResult = & (Join-Path $PSScriptRoot 'test-phase2-codex.ps1') `
+                            -TimeoutSeconds ([Math]::Min($StartupTimeoutSeconds + 30, 180))
+                    }
+                }
+
                 $normalCloseRequested = $true
+                $portReleaseStopwatch = [Diagnostics.Stopwatch]::StartNew()
                 if (-not $ownedProcess.CloseMainWindow()) {
                     throw "Outlook process $($ownedProcess.Id) rejected the normal CloseMainWindow request. It was not terminated."
                 }
+                $portReleaseMilliseconds = Wait-ForLoopbackPortRelease -Stopwatch $portReleaseStopwatch
                 if (-not $ownedProcess.WaitForExit($ShutdownTimeoutSeconds * 1000)) {
                     throw "Outlook process $($ownedProcess.Id) did not exit normally within $ShutdownTimeoutSeconds seconds. It was not terminated."
                 }
@@ -865,8 +914,11 @@ try {
                     Event45RecordId = $event45[0].RecordId
                     EventWatermark = $eventWatermark
                     StartedUtc = $cycleStartedUtc
+                    EndpointVerified = $null -ne $endpointResult
+                    CodexVerified = $null -ne $codexResult
+                    PortReleaseMilliseconds = $portReleaseMilliseconds
                 })
-                Write-Host "Phase 1 smoke cycle $cycle/3 passed (PID $($ownedProcess.Id), session $sessionId)."
+                Write-Host "Phase $ExpectedPhase smoke cycle $cycle/3 passed (PID $($ownedProcess.Id), session $sessionId)."
             }
             catch {
                 if (-not $normalCloseRequested) {
@@ -884,7 +936,11 @@ try {
         $smokeFinishedUtc = [DateTimeOffset]::UtcNow
         if (@($cycleResults | Select-Object -ExpandProperty ProcessId -Unique).Count -ne 3 -or
             @($cycleResults | Select-Object -ExpandProperty SessionId -Unique).Count -ne 3) {
-            throw 'The Phase 1 gate did not produce three distinct Outlook processes and diagnostic sessions.'
+            throw "The Phase $ExpectedPhase gate did not produce three distinct Outlook processes and diagnostic sessions."
+        }
+        if ($ExpectedPhase -ge 2 -and
+            @($cycleResults | Where-Object CodexVerified).Count -ne 1) {
+            throw 'The Phase 2 gate did not complete exactly one Codex outlook_status probe.'
         }
 
         Start-Sleep -Seconds 2
@@ -906,7 +962,8 @@ try {
         $verificationResult = & (Join-Path $PSScriptRoot 'verify-phase1-smoke.ps1') `
             -SinceUtc $smokeStartedUtc `
             -UntilUtc $smokeFinishedUtc `
-            -ExpectedCycles 3
+            -ExpectedCycles 3 `
+            -ExpectedPhase $ExpectedPhase
     }
     catch {
         $primaryFailure = $_
@@ -1011,26 +1068,36 @@ try {
         $PSCmdlet.ThrowTerminatingError($primaryFailure)
     }
     if ($cleanupFailures.Count -gt 0) {
-        throw "Phase 1 smoke cleanup failed: $($cleanupFailures -join [Environment]::NewLine)"
+        throw "Phase $ExpectedPhase smoke cleanup failed: $($cleanupFailures -join [Environment]::NewLine)"
+    }
+
+    $maximumPortReleaseMilliseconds =
+        ($cycleResults | Measure-Object -Property PortReleaseMilliseconds -Maximum).Maximum
+    if ($maximumPortReleaseMilliseconds -ge 3000) {
+        throw "The maximum loopback port-release time was $maximumPortReleaseMilliseconds ms; expected less than 3000 ms."
     }
 
     [pscustomobject]@{
         Profile = $Profile
+        Phase = $ExpectedPhase
         VerifiedCycles = $cycleResults.Count
         Cycles = $cycleResults.ToArray()
         SinceUtc = $smokeStartedUtc
         UntilUtc = $smokeFinishedUtc
         MaximumStartupMilliseconds = $verificationResult.MaximumStartupMilliseconds
+        MaximumPortReleaseMilliseconds = $maximumPortReleaseMilliseconds
         RuntimeIdentityFingerprint = $verificationResult.RuntimeIdentityFingerprint
         Event45Records = $cycleResults.Count
         Event59Records = 0
         ResiliencyStateUnchanged = $true
         OutlookStopped = $true
         PortReleased = $true
+        CodexVerified = $ExpectedPhase -ge 2
         RegistrationRemoved = $true
         TemporaryCertificateRemoved = $true
     }
 }
 finally {
+    [Environment]::SetEnvironmentVariable('OUTLOOK_MCP_TOKEN', $previousOutlookMcpToken, 'Process')
     Pop-Location
 }

@@ -2,7 +2,7 @@
 
 ## Implementation plan and repository handoff
 
-Status: Phases 0-1 complete; Phase 2 not started
+Status: Phases 0-2 complete; Phase 3 not started
 Plan version: 1.1
 Prepared: 2026-07-14
 Target: Windows x64, Classic Outlook, one active Outlook profile, local Codex clients

@@ -35,11 +35,23 @@ function Test-BearerToken([string]$Value) {
     }
 
     $base64 = $Value.Replace('-', '+').Replace('_', '/') + '='
+    $bytes = $null
     try {
-        return ([Convert]::FromBase64String($base64)).Length -eq 32
+        $bytes = [Convert]::FromBase64String($base64)
+        if ($bytes.Length -ne 32) {
+            return $false
+        }
+
+        $canonical = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        return [string]::Equals($Value, $canonical, [StringComparison]::Ordinal)
     }
     catch {
         return $false
+    }
+    finally {
+        if ($null -ne $bytes) {
+            [Array]::Clear($bytes, 0, $bytes.Length)
+        }
     }
 }
 

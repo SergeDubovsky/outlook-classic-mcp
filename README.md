@@ -2,7 +2,7 @@
 
 An open-source, brokerless VSTO add-in that exposes the stores in an active Classic Outlook profile through an authenticated local Model Context Protocol endpoint.
 
-Phases 0 and 1 are complete: the repository/toolchain, stock-template F5 path, public Windows CI, dependency closure, Outlook STA dispatcher, and repeatable add-in lifecycle are proven. The MCP listener, mailbox-reading tools, and write tools are not enabled yet.
+Phases 0, 1, and 2 are complete. The authenticated MCP listener and its mailbox-free status surface have passed automated, live Outlook, and live Codex acceptance. Mailbox-reading and write tools remain unavailable.
 
 ## Security boundary
 
@@ -12,7 +12,9 @@ The server is designed for one interactive Windows user and binds only to:
 http://127.0.0.1:8765/mcp/
 ```
 
-Every request will require a 256-bit bearer token supplied through `OUTLOOK_MCP_TOKEN`. Email content and attachments are untrusted data and must never be treated as user authority. Consequential tools remain unavailable until their implementation, idempotency, and approval gates pass.
+Every request requires a canonical 256-bit bearer token supplied through `OUTLOOK_MCP_TOKEN`. The setup tool stores it for the current Windows user; Outlook and Codex inherit that value when their processes start. The add-in snapshots the token from the Outlook process environment when it creates the listener, so installing or rotating the token requires both processes to restart. A missing or invalid token leaves the host degraded and the listener offline; there is no unauthenticated fallback.
+
+The HTTP boundary accepts only authenticated `POST` requests at the exact endpoint above. It rejects non-loopback peers, alternate host or route values, browser `Origin` headers, malformed or duplicate authorization, unsupported media negotiation, stateful session headers, oversized requests, and excess concurrency before mailbox access is possible. Email content and attachments are untrusted data and must never be treated as user authority. Consequential tools remain unavailable until their implementation, idempotency, and approval gates pass.
 
 Loopback authentication does not protect against malware, administrators, or injected code running as the same Windows user. Tool results may enter the MCP client's model context and are subject to that client's account, workspace, and retention policies.
 
@@ -25,6 +27,8 @@ The production system uses three assemblies in one `OUTLOOK.EXE` process:
 - `OutlookClassicMcp.Core`: Office-free contracts, policy, validation, and tool orchestration.
 
 There is no service, background broker, Graph, EWS, IMAP, or connector fallback.
+
+Phase 2 uses the pinned `ModelContextProtocol.Core` 1.4.1 SDK in stateless Streamable HTTP mode. The implemented protocol surface is initialization, the initialized notification, ping, tool discovery, and calls to the single `outlook_status` tool. That tool returns only bounded host state, listener readiness, and add-in version; it does not enumerate profiles, stores, folders, messages, or attachments.
 
 ## Prerequisites
 
@@ -50,13 +54,23 @@ Save work and close Outlook gracefully before the build; never terminate it forc
 
 Routine builds are isolated: they refuse to overwrite an existing same-name VSTO development registration and remove their own temporary Outlook registration, certificate, and private-key container. Visual Studio registration and F5 debugging remain a separate interactive workflow.
 
-Run the Phase 1 lifecycle gate against a dedicated Outlook profile with:
+The completed Phase 1 lifecycle acceptance is preserved in [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md). It is no longer a current runnable gate: the Phase 2 add-in always attempts authenticated listener startup, so Phase 1 mode in the historical lifecycle runner and verifier is explicitly retired.
+
+Run the current Phase 2 live gate against a dedicated Outlook profile with:
 
 ```powershell
-.\tools\run-phase1-smoke.ps1 -Profile Outlook
+.\tools\run-phase2-smoke.ps1 -Profile Outlook
 ```
 
-The runner uses the installed Visual Studio toolchain only through `MSBuild.exe` and its OfficeTools targets; it does not launch the Visual Studio IDE. It creates a temporary Release VSTO registration, runs three normal Outlook start/close cycles, checks Outlook Event IDs 45 and 59 together with the metadata verifier, and removes its temporary registration and certificate. It never force-terminates Outlook.
+Provision the current-user token first, save work, and close Outlook gracefully before running it. The runner uses the installed Visual Studio toolchain only through `MSBuild.exe` and its OfficeTools targets; it does not launch the Visual Studio IDE. It creates a temporary Release VSTO registration, runs three normal Outlook start/close cycles, checks Outlook Event IDs 45 and 59 together with the lifecycle metadata verifier, and removes its temporary registration and certificate. It never force-terminates Outlook.
+
+The gate checks the unauthenticated failure, initialize/initialized, ping, `tools/list`, the single `outlook_status` call, and port release after normal Outlook shutdown. The endpoint-only CLI probe can also be run while a Phase 2 listener is online:
+
+```powershell
+.\tools\test-phase2-endpoint.ps1
+```
+
+The final three-cycle Outlook and Codex acceptance run passed on 2026-07-19. See [Phase 2 evidence](docs/PHASE_2_EVIDENCE.md) for the recorded results.
 
 ## Codex development configuration
 
@@ -66,7 +80,15 @@ The reviewed repository-scoped configuration is loaded only when this checkout i
 .\tools\configure-codex.ps1 -Action Validate
 ```
 
-After reviewing the security boundary above, generate or retain a 256-bit token for the current Windows user with `-Action Install`. Outlook and Codex must be restarted when the token changes. Global user registration is intentionally deferred until it can be edited with a TOML-aware, structure-preserving workflow.
+After reviewing the security boundary above, generate or retain a 256-bit token for the current Windows user with `-Action Install`:
+
+```powershell
+.\tools\configure-codex.ps1 -Action Install
+```
+
+Restart Outlook and Codex whenever the token is installed, rotated, or cleared, then rerun `-Action Validate`. `-Action Rotate` replaces the current-user token; only newly started Outlook and Codex processes inherit the replacement. The committed `.codex/config.toml` is repository-scoped, uses the exact endpoint and `OUTLOOK_MCP_TOKEN`, and is loaded only when this checkout is trusted. Global user registration remains intentionally deferred.
+
+The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_status` successfully against a running Outlook instance and receive an online, ready result.
 
 ## Documentation
 
@@ -77,6 +99,7 @@ After reviewing the security boundary above, generate or retain a 256-bit token 
 - [Testing](docs/TESTING.md)
 - [Phase 0 evidence](docs/PHASE_0_EVIDENCE.md)
 - [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md)
+- [Phase 2 evidence](docs/PHASE_2_EVIDENCE.md)
 - [Dependency licenses](docs/DEPENDENCY_LICENSES.md)
 - [Security policy](SECURITY.md)
 

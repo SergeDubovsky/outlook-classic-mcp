@@ -13,6 +13,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
         StartupCompleted,
         DependencyBindingCompleted,
         DispatcherProbeCompleted,
+        ListenerBindingCompleted,
         HostQuiescent,
         ShutdownCompleted,
     }
@@ -44,7 +45,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
             long durationTicks,
             bool debuggerAttached,
             int queueDepth,
-            int trackedTaskCount)
+            int trackedTaskCount,
+            bool listenerActive)
         {
             Write(
                 RuntimeDiagnosticEvent.StartupCompleted,
@@ -55,7 +57,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 trackedTaskCount,
                 debuggerAttached: debuggerAttached,
                 buildConfiguration: GetBuildConfiguration(),
-                listenerActive: false);
+                listenerActive: listenerActive);
         }
 
         public void RecordDependencyBinding(
@@ -100,7 +102,28 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 listenerActive: false);
         }
 
-        public void RecordHostQuiescent(HostLifecycleState state, int queueDepth, int trackedTaskCount)
+        public void RecordListenerBinding(
+            HostLifecycleState state,
+            long durationTicks,
+            int queueDepth,
+            int trackedTaskCount,
+            bool listenerActive)
+        {
+            Write(
+                RuntimeDiagnosticEvent.ListenerBindingCompleted,
+                state,
+                true,
+                durationTicks,
+                queueDepth,
+                trackedTaskCount,
+                listenerActive: listenerActive);
+        }
+
+        public void RecordHostQuiescent(
+            HostLifecycleState state,
+            int queueDepth,
+            int trackedTaskCount,
+            bool listenerActive)
         {
             Write(
                 RuntimeDiagnosticEvent.HostQuiescent,
@@ -109,7 +132,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 0,
                 queueDepth,
                 trackedTaskCount,
-                listenerActive: false);
+                listenerActive: listenerActive);
         }
 
         public void RecordShutdown(
@@ -134,7 +157,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
             long durationTicks,
             int queueDepth,
             int trackedTaskCount,
-            Exception exception)
+            Exception exception,
+            bool listenerActive = false)
         {
             if (exception == null)
             {
@@ -148,7 +172,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 durationTicks,
                 queueDepth,
                 trackedTaskCount,
-                listenerActive: false,
+                listenerActive: listenerActive,
                 exception: exception);
         }
 
@@ -179,6 +203,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     return "dependency_binding_completed";
                 case RuntimeDiagnosticEvent.DispatcherProbeCompleted:
                     return "dispatcher_probe_completed";
+                case RuntimeDiagnosticEvent.ListenerBindingCompleted:
+                    return "listener_binding_completed";
                 case RuntimeDiagnosticEvent.HostQuiescent:
                     return "host_quiescent";
                 case RuntimeDiagnosticEvent.ShutdownCompleted:

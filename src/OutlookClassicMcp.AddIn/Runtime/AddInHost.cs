@@ -13,9 +13,11 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private readonly MetadataDiagnostics _diagnostics;
         private readonly HostLifecycle _lifecycle = new HostLifecycle();
         private readonly object _shutdownGate = new object();
+        private readonly object _transportGate = new object();
         private readonly TaskCompletionSource<bool> _shutdownCompletion =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private OutlookStaDispatcher? _dispatcher;
+        private LoopbackHttpServer? _server;
         private Task? _initializationTask;
         private Timer? _shutdownWatchdog;
         private Exception? _shutdownFailure;
@@ -23,6 +25,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private long _shutdownStartedTicks;
         private int _shutdownCompletionOwner;
         private int _staCleanupStarted;
+        private int _stopRequested;
         private int _trackedTaskCount;
         private bool _quitSubscribed;
 
@@ -111,6 +114,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 return _shutdownCompletion.Task;
             }
 
+            Interlocked.Exchange(ref _stopRequested, 1);
             _shutdownStartedTicks = Stopwatch.GetTimestamp();
             if (_quitSubscribed)
             {
@@ -138,11 +142,13 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 }
             }
 
+            BeginListenerShutdown();
+
             var initializationTask = _initializationTask;
             if (initializationTask == null || initializationTask.IsCompleted)
             {
                 ObserveInitialization(initializationTask);
-                FinalizeShutdownOnOutlookThread();
+                CompleteShutdownAfterTransport(onOutlookThread: true);
             }
             else
             {
@@ -166,7 +172,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     durationTicks,
                     Debugger.IsAttached,
                     queueDepth,
-                    trackedTaskCount);
+                    trackedTaskCount,
+                    IsListenerActive());
             }
             else
             {
@@ -176,7 +183,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     durationTicks,
                     queueDepth,
                     trackedTaskCount,
-                    failure);
+                    failure,
+                    IsListenerActive());
             }
         }
 
@@ -220,7 +228,81 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     executedThread,
                     dispatcher.QueueDepth,
                     Volatile.Read(ref _trackedTaskCount));
-                _lifecycle.TryMarkOnline();
+
+                stage = RuntimeDiagnosticEvent.ListenerBindingCompleted;
+                stageStarted = Stopwatch.GetTimestamp();
+                BearerToken? token = null;
+                LoopbackHttpServer? candidate = null;
+                LoopbackHttpServer? startedServer = null;
+                try
+                {
+                    token = BearerToken.LoadFromProcessEnvironment();
+                    candidate = new LoopbackHttpServer(token, CreateStatusSnapshot);
+                    token = null;
+
+                    if (Volatile.Read(ref _stopRequested) != 0)
+                    {
+                        throw new OperationCanceledException("Shutdown began before listener startup.");
+                    }
+
+                    candidate.Start();
+                    lock (_transportGate)
+                    {
+                        if (Volatile.Read(ref _stopRequested) == 0)
+                        {
+                            _server = candidate;
+                            startedServer = candidate;
+                            candidate = null;
+                        }
+                    }
+
+                    if (candidate != null)
+                    {
+                        throw new OperationCanceledException("Shutdown began during listener startup.");
+                    }
+                }
+                finally
+                {
+                    candidate?.Dispose();
+                    token?.Dispose();
+                }
+
+                if (startedServer == null || !startedServer.IsListening)
+                {
+                    if (startedServer != null)
+                    {
+                        _lifecycle.TryMarkDegraded();
+                        ObserveListenerCompletion(startedServer);
+                    }
+
+                    throw new InvalidOperationException("The loopback listener stopped during startup.");
+                }
+
+                if (!_lifecycle.TryMarkOnline())
+                {
+                    BeginListenerShutdown();
+                    if (Volatile.Read(ref _stopRequested) != 0)
+                    {
+                        return;
+                    }
+
+                    throw new InvalidOperationException("The host could not transition online after listener startup.");
+                }
+
+                if (!startedServer.IsListening)
+                {
+                    _lifecycle.TryMarkDegraded();
+                    ObserveListenerCompletion(startedServer);
+                    throw new InvalidOperationException("The loopback listener stopped during startup.");
+                }
+
+                _diagnostics.RecordListenerBinding(
+                    HostLifecycleState.Online,
+                    Stopwatch.GetTimestamp() - stageStarted,
+                    dispatcher.QueueDepth,
+                    Volatile.Read(ref _trackedTaskCount),
+                    listenerActive: true);
+                ObserveListenerCompletion(startedServer);
             }
             catch (Exception exception)
             {
@@ -231,7 +313,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     Stopwatch.GetTimestamp() - stageStarted,
                     _dispatcher?.QueueDepth ?? 0,
                     Volatile.Read(ref _trackedTaskCount),
-                    exception);
+                    exception,
+                    IsListenerActive());
             }
             finally
             {
@@ -239,7 +322,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 _diagnostics.RecordHostQuiescent(
                     _lifecycle.State,
                     _dispatcher?.QueueDepth ?? 0,
-                    remainingTasks);
+                    remainingTasks,
+                    IsListenerActive());
             }
         }
 
@@ -251,6 +335,34 @@ namespace OutlookClassicMcp.AddIn.Runtime
         private void CompleteShutdownAfterInitialization(Task initializationTask)
         {
             ObserveInitialization(initializationTask);
+            BeginListenerShutdown();
+            CompleteShutdownAfterTransport(onOutlookThread: false);
+        }
+
+        private void CompleteShutdownAfterTransport(bool onOutlookThread)
+        {
+            LoopbackHttpServer? server;
+            lock (_transportGate)
+            {
+                server = _server;
+            }
+
+            var completion = server?.BeginShutdown() ?? Task.CompletedTask;
+
+            if (!completion.IsCompleted)
+            {
+                completion.ConfigureAwait(false).GetAwaiter().OnCompleted(
+                    () => CompleteShutdownAfterTransport(onOutlookThread: false));
+                return;
+            }
+
+            ObserveTransport(completion);
+            if (onOutlookThread)
+            {
+                FinalizeShutdownOnOutlookThread();
+                return;
+            }
+
             var dispatcher = _dispatcher;
             if (dispatcher != null && dispatcher.TryPostLifecycleCallback(FinalizeShutdownOnOutlookThread))
             {
@@ -276,6 +388,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
             try
             {
                 DisposeShutdownWatchdog();
+                DisposeListener();
                 var dispatcher = _dispatcher;
                 if (dispatcher != null)
                 {
@@ -343,6 +456,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
             }
 
             DisposeShutdownWatchdog();
+            DisposeListener();
             RecordShutdownCompletion(_dispatcher?.QueueDepth ?? 0, Volatile.Read(ref _trackedTaskCount));
         }
 
@@ -423,6 +537,125 @@ namespace OutlookClassicMcp.AddIn.Runtime
             try
             {
                 initializationTask.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                RecordShutdownFailure(exception);
+            }
+        }
+
+        private OutlookStatusSnapshot CreateStatusSnapshot()
+        {
+            var version = typeof(AddInHost).Assembly.GetName().Version?.ToString() ?? "1.0.0.0";
+            return new OutlookStatusSnapshot(
+                _lifecycle.State.ToString().ToLowerInvariant(),
+                IsListenerActive(),
+                version);
+        }
+
+        private bool IsListenerActive()
+        {
+            lock (_transportGate)
+            {
+                return _server?.IsListening == true;
+            }
+        }
+
+        private void BeginListenerShutdown()
+        {
+            LoopbackHttpServer? server;
+            lock (_transportGate)
+            {
+                server = _server;
+            }
+
+            try
+            {
+                _ = server?.BeginShutdown();
+            }
+            catch (Exception exception)
+            {
+                RecordShutdownFailure(exception);
+            }
+        }
+
+        private void ObserveListenerCompletion(LoopbackHttpServer server)
+        {
+            var completion = server.Completion;
+            completion.ConfigureAwait(false).GetAwaiter().OnCompleted(
+                () => HandleListenerCompletion(server, completion));
+        }
+
+        private void HandleListenerCompletion(LoopbackHttpServer server, Task completion)
+        {
+            Exception failure;
+            try
+            {
+                completion.GetAwaiter().GetResult();
+                failure = new InvalidOperationException("The loopback listener stopped unexpectedly.");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+
+            if (Volatile.Read(ref _stopRequested) != 0)
+            {
+                return;
+            }
+
+            lock (_transportGate)
+            {
+                if (!ReferenceEquals(_server, server))
+                {
+                    return;
+                }
+            }
+
+            if (Volatile.Read(ref _stopRequested) != 0 || !_lifecycle.TryMarkDegraded())
+            {
+                return;
+            }
+
+            _diagnostics.RecordFailure(
+                RuntimeDiagnosticEvent.ListenerBindingCompleted,
+                HostLifecycleState.Degraded,
+                0,
+                _dispatcher?.QueueDepth ?? 0,
+                Volatile.Read(ref _trackedTaskCount),
+                failure,
+                listenerActive: false);
+        }
+
+        private void ObserveTransport(Task completion)
+        {
+            try
+            {
+                completion.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                RecordShutdownFailure(exception);
+            }
+        }
+
+        private void DisposeListener()
+        {
+            LoopbackHttpServer? server;
+            lock (_transportGate)
+            {
+                server = _server;
+                _server = null;
+            }
+
+            if (server == null)
+            {
+                return;
+            }
+
+            try
+            {
+                server.Dispose();
             }
             catch (Exception exception)
             {

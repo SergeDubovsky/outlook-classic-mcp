@@ -7,6 +7,8 @@ namespace OutlookClassicMcp.Transport.Tests
     [NonParallelizable]
     public sealed class LoopbackHttpServerTests
     {
+        private const string TokenText = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
         [Test]
         public void EndpointIsTheExactCanonicalLoopbackPrefix()
         {
@@ -19,7 +21,7 @@ namespace OutlookClassicMcp.Transport.Tests
         [Test]
         public void ListenerStartsAndReleasesTheExactPrefix()
         {
-            using (var first = new LoopbackHttpServer())
+            using (var first = CreateServer())
             {
                 first.Start();
                 Assert.That(first.IsListening, Is.True);
@@ -27,7 +29,7 @@ namespace OutlookClassicMcp.Transport.Tests
                 Assert.That(first.IsListening, Is.False);
                 Assert.DoesNotThrow((Action)first.Stop);
 
-                using (var second = new LoopbackHttpServer())
+                using (var second = CreateServer())
                 {
                     Assert.DoesNotThrow((Action)second.Start);
                     Assert.That(second.IsListening, Is.True);
@@ -38,10 +40,18 @@ namespace OutlookClassicMcp.Transport.Tests
         [Test]
         public void DisposedListenerCannotRestart()
         {
-            var server = new LoopbackHttpServer();
+            var server = CreateServer();
             server.Dispose();
 
             Assert.Throws<ObjectDisposedException>((Action)server.Start);
+        }
+
+        private static LoopbackHttpServer CreateServer()
+        {
+            Assert.That(BearerToken.TryCreate(TokenText, out var token), Is.True);
+            return new LoopbackHttpServer(
+                token,
+                () => new OutlookStatusSnapshot("online", true, "1.0.0"));
         }
     }
 }

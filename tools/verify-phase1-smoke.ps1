@@ -10,11 +10,20 @@ param(
     [ValidateRange(1, 10)]
     [int]$ExpectedCycles = 3,
 
+    [ValidateSet(1, 2)]
+    [int]$ExpectedPhase = 1,
+
     [string]$LogDirectory = (Join-Path $env:LOCALAPPDATA 'OutlookClassicMcp\logs')
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($ExpectedPhase -eq 1) {
+    throw (
+        'Phase 1 verification mode is retired because the current add-in always starts the Phase 2 listener. ' +
+        'Use the Phase 2 smoke wrapper; historical results remain in docs\PHASE_1_EVIDENCE.md.')
+}
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $releaseManifestPath = Join-Path $repositoryRoot 'src\OutlookClassicMcp.AddIn\bin\Release\OutlookClassicMcp.AddIn.vsto'
@@ -37,6 +46,9 @@ $expectedEvents = @(
     'startup_completed'
     'dependency_binding_completed'
     'dispatcher_probe_completed'
+    if ($ExpectedPhase -ge 2) {
+        'listener_binding_completed'
+    }
     'host_quiescent'
     'shutdown_completed'
 )
@@ -212,7 +224,7 @@ function Assert-Field {
 }
 
 if (-not (Test-Path -LiteralPath $LogDirectory -PathType Container)) {
-    throw "The Phase 1 diagnostics directory does not exist: $LogDirectory"
+    throw "The lifecycle diagnostics directory does not exist: $LogDirectory"
 }
 
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -285,7 +297,14 @@ foreach ($session in $sessions) {
         }
         Assert-Field $record 'schema' '1' "Session $sessionId event $($record.Fields['event'])"
         Assert-Field $record 'result' 'success' "Session $sessionId event $($record.Fields['event'])"
-        Assert-Field $record 'listener_active' 'false' "Session $sessionId event $($record.Fields['event'])"
+        $expectedListener = if ($ExpectedPhase -ge 2 -and
+            $record.Fields['event'] -in @('listener_binding_completed', 'host_quiescent')) {
+            'true'
+        }
+        else {
+            'false'
+        }
+        Assert-Field $record 'listener_active' $expectedListener "Session $sessionId event $($record.Fields['event'])"
         Assert-Field $record 'exception_type' '-' "Session $sessionId event $($record.Fields['event'])"
         Assert-Field $record 'hresult' '-' "Session $sessionId event $($record.Fields['event'])"
     }
@@ -293,6 +312,12 @@ foreach ($session in $sessions) {
     $startup = Get-SingleEvent $sessionRecords 'startup_completed' $sessionId
     $dependency = Get-SingleEvent $sessionRecords 'dependency_binding_completed' $sessionId
     $dispatcher = Get-SingleEvent $sessionRecords 'dispatcher_probe_completed' $sessionId
+    $listener = if ($ExpectedPhase -ge 2) {
+        Get-SingleEvent $sessionRecords 'listener_binding_completed' $sessionId
+    }
+    else {
+        $null
+    }
     $quiescent = Get-SingleEvent $sessionRecords 'host_quiescent' $sessionId
     $shutdown = Get-SingleEvent $sessionRecords 'shutdown_completed' $sessionId
 
@@ -307,6 +332,11 @@ foreach ($session in $sessions) {
     Assert-Field $dispatcher 'queue_depth' '0' "Session $sessionId dispatcher probe"
     Assert-Field $dispatcher 'captured_apartment' 'STA' "Session $sessionId dispatcher probe"
     Assert-Field $dispatcher 'executed_apartment' 'STA' "Session $sessionId dispatcher probe"
+    if ($ExpectedPhase -ge 2) {
+        Assert-Field $listener 'state' 'online' "Session $sessionId listener binding"
+        Assert-Field $listener 'queue_depth' '0' "Session $sessionId listener binding"
+        Assert-Field $listener 'listener_active' 'true' "Session $sessionId listener binding"
+    }
     if ($null -ne $dispatcher) {
         [int]$capturedManagedThread = 0
         [int]$executedManagedThread = 0
@@ -416,13 +446,14 @@ finally {
 }
 
 if ($failures.Count -gt 0) {
-    throw "Phase 1 smoke verification failed:`n - $($failures -join "`n - ")"
+    throw "Phase $ExpectedPhase smoke verification failed:`n - $($failures -join "`n - ")"
 }
 
 [pscustomobject]@{
     SinceUtc = $SinceUtc.ToUniversalTime()
     UntilUtc = $UntilUtc.ToUniversalTime()
     VerifiedCycles = $sessions.Count
+    ExpectedPhase = $ExpectedPhase
     MaximumStartupMilliseconds = ($startupDurations | Measure-Object -Maximum).Maximum
     RuntimeIdentityFingerprint = $expectedFingerprint
     LogFiles = $logFiles.Count

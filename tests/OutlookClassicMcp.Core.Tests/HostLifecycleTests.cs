@@ -35,6 +35,17 @@ namespace OutlookClassicMcp.Core.Tests
         }
 
         [Test]
+        public void OnlineHostCanFailClosedWhenItsListenerStops()
+        {
+            var lifecycle = CreateOnlineLifecycle();
+
+            Assert.That(lifecycle.TryMarkDegraded(), Is.True);
+
+            Assert.That(lifecycle.State, Is.EqualTo(HostLifecycleState.Degraded));
+            Assert.That(lifecycle.TryMarkDegraded(), Is.False);
+        }
+
+        [Test]
         public void PausedHostCanResumeThroughStartup()
         {
             var lifecycle = CreateOnlineLifecycle();
