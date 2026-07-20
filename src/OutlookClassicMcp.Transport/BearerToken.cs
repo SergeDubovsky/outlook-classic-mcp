@@ -1,5 +1,7 @@
 using System;
 using System.Security;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace OutlookClassicMcp.Transport
 {
@@ -8,6 +10,8 @@ namespace OutlookClassicMcp.Transport
         public const string EnvironmentVariableName = "OUTLOOK_MCP_TOKEN";
         public const int EncodedLength = 43;
         private const int DecodedLength = 32;
+        private const string CursorKeyDomain = "outlook-classic-mcp/cursor-key/v1";
+        private readonly object _gate = new object();
         private byte[]? _value;
 
         private BearerToken(byte[] value)
@@ -43,42 +47,75 @@ namespace OutlookClassicMcp.Transport
 
         public bool MatchesAuthorizationHeaders(string[]? values)
         {
-            var expected = _value ?? throw new ObjectDisposedException(nameof(BearerToken));
-            if (values == null || values.Length != 1)
+            lock (_gate)
             {
-                return false;
-            }
-
-            const string scheme = "Bearer ";
-            var header = values[0];
-            if (header == null ||
-                header.Length != scheme.Length + EncodedLength ||
-                !header.StartsWith(scheme, StringComparison.OrdinalIgnoreCase) ||
-                !TryDecode(header.Substring(scheme.Length), out var candidate))
-            {
-                return false;
-            }
-
-            try
-            {
-                var difference = 0;
-                for (var index = 0; index < DecodedLength; index++)
+                var expected = _value ?? throw new ObjectDisposedException(nameof(BearerToken));
+                if (values == null || values.Length != 1)
                 {
-                    difference |= expected[index] ^ candidate[index];
+                    return false;
                 }
 
-                return difference == 0;
+                const string scheme = "Bearer ";
+                var header = values[0];
+                if (header == null ||
+                    header.Length != scheme.Length + EncodedLength ||
+                    !header.StartsWith(scheme, StringComparison.OrdinalIgnoreCase) ||
+                    !TryDecode(header.Substring(scheme.Length), out var candidate))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    var difference = 0;
+                    for (var index = 0; index < DecodedLength; index++)
+                    {
+                        difference |= expected[index] ^ candidate[index];
+                    }
+
+                    return difference == 0;
+                }
+                finally
+                {
+                    Array.Clear(candidate, 0, candidate.Length);
+                }
+            }
+        }
+
+        internal HmacCursorCodec CreateCursorCodec()
+        {
+            byte[] domainBytes = Array.Empty<byte>();
+            byte[] derivedKey = Array.Empty<byte>();
+            try
+            {
+                lock (_gate)
+                {
+                    var value = _value ?? throw new ObjectDisposedException(nameof(BearerToken));
+                    domainBytes = Encoding.UTF8.GetBytes(CursorKeyDomain);
+                    using (var hmac = new HMACSHA256(value))
+                    {
+                        derivedKey = hmac.ComputeHash(domainBytes);
+                    }
+                }
+
+                return new HmacCursorCodec(derivedKey);
             }
             finally
             {
-                Array.Clear(candidate, 0, candidate.Length);
+                Array.Clear(domainBytes, 0, domainBytes.Length);
+                Array.Clear(derivedKey, 0, derivedKey.Length);
             }
         }
 
         public void Dispose()
         {
-            var value = _value;
-            _value = null;
+            byte[]? value;
+            lock (_gate)
+            {
+                value = _value;
+                _value = null;
+            }
+
             if (value != null)
             {
                 Array.Clear(value, 0, value.Length);

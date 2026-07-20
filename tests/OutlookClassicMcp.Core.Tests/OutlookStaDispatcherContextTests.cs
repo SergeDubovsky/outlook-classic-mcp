@@ -21,6 +21,175 @@ namespace OutlookClassicMcp.Core.Tests
         private static readonly int[] ExpectedFirstTwoExecutions = { 1, 2 };
 
         [Test]
+        public void StatefulContextWorkReceivesManagedStateAndCancellationTokenOnOwnerSta()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                var result = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    string,
+                    string>(
+                    "managed-state",
+                    ExecuteStateful,
+                    CancellationToken.None);
+
+                Assert.That(result.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                Assert.That(result.Result, Is.EqualTo("managed-state"));
+                Assert.That(context.ExecutedThreads, Has.Count.EqualTo(1));
+                Assert.That(
+                    context.ExecutedThreads[0].ManagedThreadId,
+                    Is.EqualTo(harness.Dispatcher.OwnerThread.ManagedThreadId));
+                Assert.That(context.ExecutedThreads[0].ApartmentState, Is.EqualTo(ApartmentState.STA));
+            }
+        }
+
+        [Test]
+        public void StatefulContextInvocationRejectsBoundDelegateBeforeQueueing()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                Func<DispatcherOwnerContext, string, CancellationToken, string> boundOperation =
+                    context.BoundStateOperation;
+                Action invokeBoundOperation = () =>
+                    harness.Dispatcher.InvokeWithContextAsync(
+                        "managed-state",
+                        boundOperation,
+                        CancellationToken.None);
+
+                Assert.Throws<ArgumentException>(invokeBoundOperation);
+                Assert.That(harness.Dispatcher.QueueDepth, Is.Zero);
+            }
+        }
+
+        [Test]
+        public void PreCanceledStatefulContextWorkNeverQueues()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var cancellation = new CancellationTokenSource())
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                cancellation.Cancel();
+                var result = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    string,
+                    string>(
+                    "managed-state",
+                    ExecuteStateful,
+                    cancellation.Token);
+
+                Assert.That(result.IsCanceled, Is.True);
+                Assert.That(harness.Dispatcher.QueueDepth, Is.Zero);
+                Assert.That(context.ExecutedThreads, Is.Empty);
+            }
+        }
+
+        [Test]
+        public void CancellationWhileStatefulContextWorkIsQueuedPreventsExecution()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var cancellation = new CancellationTokenSource())
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                var active = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(1, ExecuteBlockingStateful, CancellationToken.None);
+                Assert.That(context.FirstEntered.Wait(TimeSpan.FromSeconds(5)), Is.True);
+
+                var queued = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(2, ExecuteStatefulInt, cancellation.Token);
+                cancellation.Cancel();
+
+                Assert.That(
+                    SpinWait.SpinUntil(() => queued.IsCompleted, TimeSpan.FromSeconds(5)),
+                    Is.True);
+                Assert.That(queued.IsCanceled, Is.True);
+                context.ReleaseFirst.Set();
+                Assert.That(active.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                Assert.That(active.Result, Is.EqualTo(1));
+                Assert.That(context.ExecutionCount, Is.EqualTo(1));
+            }
+        }
+
+        [Test]
+        public void RunningStatefulContextWorkObservesCooperativeCancellation()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var cancellation = new CancellationTokenSource())
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                var active = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(1, ExecuteCooperativelyCanceled, cancellation.Token);
+                Assert.That(context.FirstEntered.Wait(TimeSpan.FromSeconds(5)), Is.True);
+
+                cancellation.Cancel();
+
+                Assert.That(
+                    SpinWait.SpinUntil(() => active.IsCompleted, TimeSpan.FromSeconds(5)),
+                    Is.True);
+                Assert.That(active.IsFaulted, Is.True);
+                Assert.That(
+                    active.Exception!.Flatten().InnerException,
+                    Is.TypeOf<OperationCanceledException>());
+            }
+        }
+
+        [Test]
+        public void StatefulContextShutdownWaitsForActiveAndFailsQueuedWork()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                var active = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(1, ExecuteBlockingStateful, CancellationToken.None);
+                Assert.That(context.FirstEntered.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                var queued = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(2, ExecuteStatefulInt, CancellationToken.None);
+
+                var shutdown = harness.Dispatcher.BeginShutdown();
+
+                AssertFaultedWithMessage(queued, "HOST_STOPPING");
+                Assert.That(shutdown.IsCompleted, Is.False);
+                context.ReleaseFirst.Set();
+                Assert.That(active.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                Assert.That(shutdown.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                Assert.That(active.Result, Is.EqualTo(1));
+                Assert.That(context.ExecutionCount, Is.EqualTo(1));
+            }
+        }
+
+        [Test]
+        public void StatefulContextOperationExceptionCompletesTheTaskAsFaulted()
+        {
+            var context = new DispatcherOwnerContext();
+            using (var harness = new StaDispatcherHarness(context))
+            {
+                var result = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(1, ThrowStateful, CancellationToken.None);
+
+                Assert.That(
+                    SpinWait.SpinUntil(() => result.IsCompleted, TimeSpan.FromSeconds(5)),
+                    Is.True);
+                Assert.That(result.IsFaulted, Is.True);
+                Assert.That(
+                    result.Exception!.Flatten().InnerException,
+                    Is.TypeOf<InvalidOperationException>());
+            }
+        }
+
+        [Test]
         public void ContextWorkIsSerializedOnOwnerStaAndQueuedStateIsIsolated()
         {
             var context = new DispatcherOwnerContext();
@@ -202,8 +371,12 @@ namespace OutlookClassicMcp.Core.Tests
                 }
 
                 Assert.That(harness.Dispatcher.QueueDepth, Is.EqualTo(DefaultCapacity));
-                var overflow = harness.Dispatcher.InvokeWithContextAsync<DispatcherOwnerContext, int>(
-                    ExecuteBlockingFirst,
+                var overflow = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(
+                    99,
+                    ExecuteStatefulInt,
                     CancellationToken.None);
                 AssertFaultedWithMessage(overflow, "HOST_BUSY");
 
@@ -227,8 +400,12 @@ namespace OutlookClassicMcp.Core.Tests
             using (var harness = new StaDispatcherHarness(stoppingContext))
             {
                 harness.Dispatcher.BeginShutdown();
-                var stopped = harness.Dispatcher.InvokeWithContextAsync<DispatcherOwnerContext, int>(
-                    ExecuteBlockingFirst,
+                var stopped = harness.Dispatcher.InvokeWithContextAsync<
+                    DispatcherOwnerContext,
+                    int,
+                    int>(
+                    1,
+                    ExecuteStatefulInt,
                     CancellationToken.None);
                 AssertFaultedWithMessage(stopped, "HOST_STOPPING");
             }
@@ -252,8 +429,12 @@ namespace OutlookClassicMcp.Core.Tests
                             unavailable = dispatcher.InvokeWithContextAsync<DispatcherOwnerContext, int>(
                                 ExecuteBlockingFirst,
                                 CancellationToken.None);
-                            unavailableAgain = dispatcher.InvokeWithContextAsync<DispatcherOwnerContext, int>(
-                                ExecuteBlockingFirst,
+                            unavailableAgain = dispatcher.InvokeWithContextAsync<
+                                DispatcherOwnerContext,
+                                int,
+                                int>(
+                                1,
+                                ExecuteStatefulInt,
                                 CancellationToken.None);
                             unavailableShutdown = dispatcher.BeginShutdown();
                         }
@@ -303,6 +484,63 @@ namespace OutlookClassicMcp.Core.Tests
             {
                 Interlocked.Decrement(ref context.ActiveExecutions);
             }
+        }
+
+        private static string ExecuteStateful(
+            DispatcherOwnerContext context,
+            string state,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            context.ExecutedThreads.Add(OutlookThreadContext.Capture());
+            return state;
+        }
+
+        private static int ExecuteStatefulInt(
+            DispatcherOwnerContext context,
+            int state,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            context.ExecutedThreads.Add(OutlookThreadContext.Capture());
+            return state;
+        }
+
+        private static int ExecuteBlockingStateful(
+            DispatcherOwnerContext context,
+            int state,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ExecuteBlockingFirst(context);
+            return state;
+        }
+
+        private static int ExecuteCooperativelyCanceled(
+            DispatcherOwnerContext context,
+            int state,
+            CancellationToken cancellationToken)
+        {
+            context.FirstEntered.Set();
+            while (!context.ReleaseFirst.IsSet)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Application.DoEvents();
+                Thread.Sleep(1);
+            }
+
+            return state;
+        }
+
+        private static int ThrowStateful(
+            DispatcherOwnerContext context,
+            int state,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            GC.KeepAlive(context);
+            GC.KeepAlive(state);
+            throw new InvalidOperationException("stateful failure");
         }
 
         private static void UpdateMaximum(ref int maximum, int candidate)
@@ -381,6 +619,15 @@ namespace OutlookClassicMcp.Core.Tests
             public int BoundOperation(DispatcherOwnerContext context)
             {
                 return ReferenceEquals(this, context) ? context.ExecutionCount : -1;
+            }
+
+            public string BoundStateOperation(
+                DispatcherOwnerContext context,
+                string state,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return ReferenceEquals(this, context) ? state : string.Empty;
             }
 
             public void Dispose()

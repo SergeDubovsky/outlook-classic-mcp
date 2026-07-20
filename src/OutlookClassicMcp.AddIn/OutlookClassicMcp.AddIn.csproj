@@ -98,6 +98,9 @@
     <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(OutlookMcpSmokeSeeder)' == 'true'">
+    <DefineConstants>$(DefineConstants);OUTLOOK_MCP_SMOKE_SEEDER</DefineConstants>
+  </PropertyGroup>
   <!--
     This section specifies references for the project.
   -->
@@ -227,8 +230,16 @@
     <Compile Include="Runtime\HostLifecycleState.cs" />
     <Compile Include="Runtime\AddInHost.cs" />
     <Compile Include="Runtime\MetadataDiagnostics.cs" />
+    <Compile Include="Runtime\OutlookComMetrics.cs" />
     <Compile Include="Runtime\OutlookErrorMapper.cs" />
     <Compile Include="Runtime\OutlookGateway.cs" />
+    <Compile Include="Runtime\OutlookGateway.Read.cs" />
+    <Compile Include="Runtime\OutlookReadDate.cs" />
+    <Compile Include="Runtime\OutlookReadFilter.cs" />
+    <Compile Include="Runtime\OutlookReadOperations.cs" />
+    <Compile Include="Runtime\OutlookReadProjection.cs" />
+    <Compile Include="Runtime\OutlookSearchMerge.cs" />
+    <Compile Include="Runtime\OutlookSearchFolderPolicy.cs" />
     <Compile Include="Runtime\OutlookRuntimeContext.cs" />
     <Compile Include="Runtime\OutlookStaDispatcher.cs" />
     <Compile Include="Runtime\OutlookThreadContext.cs" />
@@ -242,6 +253,9 @@
       <DependentUpon>ThisAddIn.Designer.xml</DependentUpon>
     </Compile>
     <AppDesigner Include="Properties\" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OutlookMcpSmokeSeeder)' == 'true'">
+    <Compile Include="Smoke\Phase4FixtureSeeder.cs" />
   </ItemGroup>
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>

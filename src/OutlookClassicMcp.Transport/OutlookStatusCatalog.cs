@@ -1,6 +1,8 @@
 using System;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
+using OutlookClassicMcp.Core.Outlook;
 using OutlookClassicMcp.Core.Policy;
 
 namespace OutlookClassicMcp.Transport
@@ -13,11 +15,16 @@ namespace OutlookClassicMcp.Transport
         public const int MaximumHostStateLength = 32;
         public const int MaximumVersionLength = 64;
 
-        public OutlookStatusSnapshot(string hostState, bool listenerReady, string version)
+        public OutlookStatusSnapshot(
+            string hostState,
+            bool listenerReady,
+            string version,
+            OutlookReadDiagnosticsSnapshot? readDiagnostics = null)
         {
             HostState = ValidateScalar(hostState, nameof(hostState), MaximumHostStateLength);
             ListenerReady = listenerReady;
             Version = ValidateScalar(version, nameof(version), MaximumVersionLength);
+            ReadDiagnostics = readDiagnostics ?? new OutlookReadDiagnosticsSnapshot(0, 0, 0, 0, 0);
         }
 
         public string HostState { get; }
@@ -25,6 +32,8 @@ namespace OutlookClassicMcp.Transport
         public bool ListenerReady { get; }
 
         public string Version { get; }
+
+        public OutlookReadDiagnosticsSnapshot ReadDiagnostics { get; }
 
         private static string ValidateScalar(string value, string parameterName, int maximumLength)
         {
@@ -91,7 +100,15 @@ namespace OutlookClassicMcp.Transport
             "\"required\":[\"ok\",\"operationId\",\"error\"]," +
             "\"additionalProperties\":false}]}");
 
+        private static readonly JsonElement OutputSchemaWithReadDiagnostics =
+            CreateOutputSchemaWithReadDiagnostics();
+
         public static Tool CreateDescriptor()
+        {
+            return CreateDescriptor(includeReadDiagnostics: false);
+        }
+
+        public static Tool CreateDescriptor(bool includeReadDiagnostics)
         {
             return new Tool
             {
@@ -99,7 +116,9 @@ namespace OutlookClassicMcp.Transport
                 Title = "Outlook status",
                 Description = "Reports bounded add-in and listener readiness without reading Outlook stores, folders, messages, or attachments.",
                 InputSchema = InputSchema,
-                OutputSchema = OutputSchema,
+                OutputSchema = includeReadDiagnostics
+                    ? OutputSchemaWithReadDiagnostics
+                    : OutputSchema,
                 Annotations = new ToolAnnotations
                 {
                     ReadOnlyHint = true,
@@ -107,6 +126,42 @@ namespace OutlookClassicMcp.Transport
                     IdempotentHint = true,
                     OpenWorldHint = false,
                 },
+            };
+        }
+
+        private static JsonElement CreateOutputSchemaWithReadDiagnostics()
+        {
+            var schema = JsonNode.Parse(OutputSchema.GetRawText())!.AsObject();
+            var data = schema["oneOf"]!.AsArray()[0]!["properties"]!["data"]!.AsObject();
+            data["properties"]!.AsObject()["readDiagnostics"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["comAcquired"] = CreateNonnegativeIntegerSchema(),
+                    ["comReleased"] = CreateNonnegativeIntegerSchema(),
+                    ["comOutstanding"] = CreateNonnegativeIntegerSchema(),
+                    ["comPeak"] = CreateNonnegativeIntegerSchema(),
+                    ["materializedItemHighWater"] = CreateNonnegativeIntegerSchema(),
+                },
+                ["required"] = new JsonArray(
+                    "comAcquired",
+                    "comReleased",
+                    "comOutstanding",
+                    "comPeak",
+                    "materializedItemHighWater"),
+                ["additionalProperties"] = false,
+            };
+            data["required"]!.AsArray().Add("readDiagnostics");
+            return JsonSerializer.SerializeToElement(schema);
+        }
+
+        private static JsonObject CreateNonnegativeIntegerSchema()
+        {
+            return new JsonObject
+            {
+                ["type"] = "integer",
+                ["minimum"] = 0,
             };
         }
 

@@ -10,6 +10,13 @@ namespace OutlookClassicMcp.Transport.Tests
     {
         private readonly Func<CancellationToken, Task<OutlookProbeSnapshot>> _handler;
         private int _callCount;
+        private int _listMailboxesCallCount;
+        private int _listFoldersCallCount;
+        private int _listMessagesCallCount;
+        private int _searchMessagesCallCount;
+        private int _getMessageCallCount;
+        private int _getConversationCallCount;
+        private int _listAttachmentsCallCount;
 
         public FakeOutlookGateway()
             : this(_ => Task.FromResult(ProbeTestData.CreateSnapshot()))
@@ -23,13 +30,148 @@ namespace OutlookClassicMcp.Transport.Tests
 
         public int CallCount => Volatile.Read(ref _callCount);
 
+        public int ListMailboxesCallCount => Volatile.Read(ref _listMailboxesCallCount);
+
+        public int ListFoldersCallCount => Volatile.Read(ref _listFoldersCallCount);
+
+        public int ListMessagesCallCount => Volatile.Read(ref _listMessagesCallCount);
+
+        public int SearchMessagesCallCount => Volatile.Read(ref _searchMessagesCallCount);
+
+        public int GetMessageCallCount => Volatile.Read(ref _getMessageCallCount);
+
+        public int GetConversationCallCount => Volatile.Read(ref _getConversationCallCount);
+
+        public int ListAttachmentsCallCount => Volatile.Read(ref _listAttachmentsCallCount);
+
+        public int ReadCallCount =>
+            ListMailboxesCallCount +
+            ListFoldersCallCount +
+            ListMessagesCallCount +
+            SearchMessagesCallCount +
+            GetMessageCallCount +
+            GetConversationCallCount +
+            ListAttachmentsCallCount;
+
         public CancellationToken LastCancellationToken { get; private set; }
+
+        public Func<OutlookListMailboxesRequest, CancellationToken, Task<OutlookMailboxPage>>?
+            ListMailboxesHandler { get; set; }
+
+        public Func<OutlookListFoldersRequest, CancellationToken, Task<OutlookFolderPage>>?
+            ListFoldersHandler { get; set; }
+
+        public Func<OutlookListMessagesRequest, CancellationToken, Task<OutlookMessagePage>>?
+            ListMessagesHandler { get; set; }
+
+        public Func<OutlookSearchMessagesRequest, CancellationToken, Task<OutlookMessagePage>>?
+            SearchMessagesHandler { get; set; }
+
+        public Func<OutlookGetMessageRequest, CancellationToken, Task<OutlookMessageDetail>>?
+            GetMessageHandler { get; set; }
+
+        public Func<OutlookGetConversationRequest, CancellationToken, Task<OutlookMessagePage>>?
+            GetConversationHandler { get; set; }
+
+        public Func<OutlookListAttachmentsRequest, CancellationToken, Task<OutlookAttachmentPage>>?
+            ListAttachmentsHandler { get; set; }
+
+        public OutlookListMailboxesRequest? LastListMailboxesRequest { get; private set; }
+
+        public OutlookListFoldersRequest? LastListFoldersRequest { get; private set; }
+
+        public OutlookListMessagesRequest? LastListMessagesRequest { get; private set; }
+
+        public OutlookSearchMessagesRequest? LastSearchMessagesRequest { get; private set; }
+
+        public OutlookGetMessageRequest? LastGetMessageRequest { get; private set; }
+
+        public OutlookGetConversationRequest? LastGetConversationRequest { get; private set; }
+
+        public OutlookListAttachmentsRequest? LastListAttachmentsRequest { get; private set; }
 
         public Task<OutlookProbeSnapshot> ProbeAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _callCount);
             LastCancellationToken = cancellationToken;
             return _handler(cancellationToken);
+        }
+
+        public Task<OutlookMailboxPage> ListMailboxesAsync(
+            OutlookListMailboxesRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _listMailboxesCallCount);
+            LastListMailboxesRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(ListMailboxesHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookFolderPage> ListFoldersAsync(
+            OutlookListFoldersRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _listFoldersCallCount);
+            LastListFoldersRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(ListFoldersHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookMessagePage> ListMessagesAsync(
+            OutlookListMessagesRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _listMessagesCallCount);
+            LastListMessagesRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(ListMessagesHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookMessagePage> SearchMessagesAsync(
+            OutlookSearchMessagesRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _searchMessagesCallCount);
+            LastSearchMessagesRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(SearchMessagesHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookMessageDetail> GetMessageAsync(
+            OutlookGetMessageRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _getMessageCallCount);
+            LastGetMessageRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(GetMessageHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookMessagePage> GetConversationAsync(
+            OutlookGetConversationRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _getConversationCallCount);
+            LastGetConversationRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(GetConversationHandler)(request, cancellationToken);
+        }
+
+        public Task<OutlookAttachmentPage> ListAttachmentsAsync(
+            OutlookListAttachmentsRequest request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _listAttachmentsCallCount);
+            LastListAttachmentsRequest = request;
+            LastCancellationToken = cancellationToken;
+            return RequireHandler(ListAttachmentsHandler)(request, cancellationToken);
+        }
+
+        private static THandler RequireHandler<THandler>(THandler? handler)
+            where THandler : class
+        {
+            return handler ?? throw new InvalidOperationException(
+                "The fake gateway handler was not configured for this operation.");
         }
     }
 

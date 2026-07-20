@@ -125,8 +125,15 @@ function New-Phase3InventoryEntry {
 function Import-Phase3ExpectedStoreInventory {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [ValidateSet('classic-outlook-ui', 'conditional-vsto-seeder')]
+        [string[]]$AllowedSources = @('classic-outlook-ui')
     )
+
+    $allowedSourceSet = @($AllowedSources | Select-Object -Unique)
+    if ($allowedSourceSet.Count -lt 1 -or $allowedSourceSet.Count -gt 2) {
+        throw 'The expected store inventory must allow one or two recognized sources.'
+    }
 
     if (-not $Path.EndsWith('.local.json', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The expected store inventory must use the ignored .local.json suffix.'
@@ -163,8 +170,9 @@ function Import-Phase3ExpectedStoreInventory {
         -Minimum 1 `
         -Maximum 1 `
         -Context 'The expected store inventory schema'
-    if ($schema -ne 1 -or $document.source -cne 'classic-outlook-ui') {
-        throw 'The expected store inventory must declare schema 1 and source classic-outlook-ui.'
+    if ($schema -ne 1 -or $document.source -isnot [string] -or
+        $document.source -cnotin $allowedSourceSet) {
+        throw 'The expected store inventory must declare schema 1 and an explicitly allowed source.'
     }
 
     if ($document.stores -isnot [System.Array]) {
@@ -198,6 +206,7 @@ function Import-Phase3ExpectedStoreInventory {
         Count = $multiset.Count
         Entries = $multiset.Entries
         Sha256 = $multiset.Sha256
+        Source = $document.source
     }
 }
 

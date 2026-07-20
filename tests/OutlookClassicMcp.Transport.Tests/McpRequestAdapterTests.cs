@@ -199,6 +199,7 @@ namespace OutlookClassicMcp.Transport.Tests
                 Assert.That(data.GetProperty("hostState").GetString(), Is.EqualTo("Online"));
                 Assert.That(data.GetProperty("listenerReady").GetBoolean(), Is.True);
                 Assert.That(data.GetProperty("version").GetString(), Is.EqualTo("1.0.0"));
+                Assert.That(data.TryGetProperty("readDiagnostics", out _), Is.False);
             }
 
             Assert.That(providerCalls, Is.EqualTo(1));

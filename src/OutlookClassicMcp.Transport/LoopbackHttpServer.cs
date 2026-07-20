@@ -26,6 +26,7 @@ namespace OutlookClassicMcp.Transport
         private readonly object _gate = new object();
         private readonly HttpListener _listener;
         private readonly BearerToken _bearerToken;
+        private readonly HmacCursorCodec _cursorCodec;
         private readonly HttpRequestValidator _validator;
         private readonly McpRequestAdapter _adapter;
         private readonly TimeSpan _handlerDeadline;
@@ -76,13 +77,23 @@ namespace OutlookClassicMcp.Transport
 
             _bearerToken = bearerToken ?? throw new ArgumentNullException(nameof(bearerToken));
             _validator = new HttpRequestValidator(bearerToken);
-            _adapter = new McpRequestAdapter(
-                statusProvider ?? throw new ArgumentNullException(nameof(statusProvider)),
-                outlookGateway ?? throw new ArgumentNullException(nameof(outlookGateway)),
-                toolDeadline);
-            _listener = new HttpListener();
-            _listener.Prefixes.Add(LoopbackEndpoint.Prefix);
-            _handlerDeadline = handlerDeadline;
+            _cursorCodec = bearerToken.CreateCursorCodec();
+            try
+            {
+                _adapter = new McpRequestAdapter(
+                    statusProvider ?? throw new ArgumentNullException(nameof(statusProvider)),
+                    outlookGateway ?? throw new ArgumentNullException(nameof(outlookGateway)),
+                    _cursorCodec,
+                    toolDeadline);
+                _listener = new HttpListener();
+                _listener.Prefixes.Add(LoopbackEndpoint.Prefix);
+                _handlerDeadline = handlerDeadline;
+            }
+            catch
+            {
+                _cursorCodec.Dispose();
+                throw;
+            }
         }
 
         public bool IsListening
@@ -513,6 +524,7 @@ namespace OutlookClassicMcp.Transport
 
             try
             {
+                _cursorCodec.Dispose();
                 _bearerToken.Dispose();
                 _handlerSlots.Dispose();
                 _shutdown.Dispose();

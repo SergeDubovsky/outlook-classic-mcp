@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using NUnit.Framework;
 using OutlookClassicMcp.Core.Policy;
 
@@ -30,6 +31,28 @@ namespace OutlookClassicMcp.Core.Tests
         {
             Assert.Throws<ArgumentOutOfRangeException>(
                 (Action)(() => ToolExposurePolicy.GetEnabledTools((ImplementationPhase)99)));
+        }
+
+        [Test]
+        public void BoundedReadsExposePriorToolsPlusExactlySevenReadTools()
+        {
+            var tools = ToolExposurePolicy.GetEnabledTools(ImplementationPhase.BoundedReads);
+
+            Assert.That(
+                tools,
+                Is.EqualTo(new[]
+                {
+                    ToolNames.OutlookStatus,
+                    ToolNames.OutlookProbe,
+                    ToolNames.OutlookListMailboxes,
+                    ToolNames.OutlookListFolders,
+                    ToolNames.OutlookListMessages,
+                    ToolNames.OutlookSearchMessages,
+                    ToolNames.OutlookGetMessage,
+                    ToolNames.OutlookGetConversation,
+                    ToolNames.OutlookListAttachments,
+                }));
+            Assert.That(tools.Distinct().ToArray(), Has.Length.EqualTo(9));
         }
     }
 }

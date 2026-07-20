@@ -28,10 +28,23 @@ namespace OutlookClassicMcp.Transport.Tests
         private static readonly string[] RetryAfterOne = { "1" };
         private static readonly string[] SseCacheDirectives = { "no-cache", "no-store" };
         private static readonly string[] IdentityEncoding = { "identity" };
+        private static readonly string[] ValidTokenAuthorizationHeaders =
+            { "Bearer " + TokenText };
+        private static readonly string CursorQueryHash = new string('a', 64);
         private static readonly string[] StatusDataProperties =
-            { "hostState", "listenerReady", "version" };
-        private static readonly string[] PhaseThreeToolNames =
-            { "outlook_status", "outlook_probe" };
+            { "hostState", "listenerReady", "version", "readDiagnostics" };
+        private static readonly string[] PhaseFourToolNames =
+        {
+            "outlook_status",
+            "outlook_probe",
+            "outlook_list_mailboxes",
+            "outlook_list_folders",
+            "outlook_list_messages",
+            "outlook_search_messages",
+            "outlook_get_message",
+            "outlook_get_conversation",
+            "outlook_list_attachments",
+        };
 
         [Test]
         public async Task UnauthorizedResponsesAreIndistinguishableAcrossRawForms()
@@ -253,9 +266,33 @@ namespace OutlookClassicMcp.Transport.Tests
         }
 
         [Test]
-        public async Task ToolListAndStatusExposeOnlyBoundedPhaseThreeData()
+        public async Task ToolListStatusAndReadExposeBoundedPhaseFourData()
         {
-            using (var server = CreateServer(TokenText))
+            var gateway = new FakeOutlookGateway();
+            var mailbox = CreateLoopbackMailbox();
+            var calls = 0;
+            gateway.ListMailboxesHandler = (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(calls == 1
+                    ? new OutlookMailboxPage(
+                        new[] { mailbox },
+                        new OutlookMailboxKeysetAnchor(
+                            mailbox.DisplayName,
+                            mailbox.Mailbox))
+                    : new OutlookMailboxPage(
+                        Array.Empty<OutlookMailboxSummary>(),
+                        null));
+            };
+
+            using (var server = CreateServer(
+                TokenText,
+                () => new OutlookStatusSnapshot(
+                    "online",
+                    listenerReady: true,
+                    "1.0.0",
+                    new OutlookReadDiagnosticsSnapshot(21, 18, 3, 6, 50)),
+                gateway))
             using (var client = CreateHttpClient())
             {
                 server.Start();
@@ -267,9 +304,13 @@ namespace OutlookClassicMcp.Transport.Tests
                 using (var payload = ParseSingleSsePayload(list.Body))
                 {
                     var tools = payload.RootElement.GetProperty("result").GetProperty("tools");
-                    Assert.That(tools.GetArrayLength(), Is.EqualTo(2));
-                    Assert.That(tools[0].GetProperty("name").GetString(), Is.EqualTo("outlook_status"));
-                    Assert.That(tools[1].GetProperty("name").GetString(), Is.EqualTo("outlook_probe"));
+                    Assert.That(tools.GetArrayLength(), Is.EqualTo(PhaseFourToolNames.Length));
+                    for (var index = 0; index < PhaseFourToolNames.Length; index++)
+                    {
+                        Assert.That(
+                            tools[index].GetProperty("name").GetString(),
+                            Is.EqualTo(PhaseFourToolNames[index]));
+                    }
                 }
 
                 var status = await SendJsonAsync(
@@ -291,9 +332,55 @@ namespace OutlookClassicMcp.Transport.Tests
                     Assert.That(data.GetProperty("hostState").GetString(), Is.EqualTo("online"));
                     Assert.That(data.GetProperty("listenerReady").GetBoolean(), Is.True);
                     Assert.That(data.GetProperty("version").GetString(), Is.EqualTo("1.0.0"));
+                    var diagnostics = data.GetProperty("readDiagnostics");
+                    Assert.That(diagnostics.GetProperty("comAcquired").GetInt64(), Is.EqualTo(21));
+                    Assert.That(diagnostics.GetProperty("comReleased").GetInt64(), Is.EqualTo(18));
+                    Assert.That(diagnostics.GetProperty("comOutstanding").GetInt64(), Is.EqualTo(3));
+                    Assert.That(diagnostics.GetProperty("comPeak").GetInt64(), Is.EqualTo(6));
+                    Assert.That(
+                        diagnostics.GetProperty("materializedItemHighWater").GetInt64(),
+                        Is.EqualTo(50));
                     Assert.That(data.EnumerateObject().Select(property => property.Name),
                         Is.EquivalentTo(StatusDataProperties));
                 }
+
+                var firstRead = await SendJsonAsync(
+                    client,
+                    "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{" +
+                    "\"name\":\"outlook_list_mailboxes\",\"arguments\":{}}}",
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(firstRead, expectedId: 32);
+                string cursor;
+                using (var payload = ParseSingleSsePayload(firstRead.Body))
+                {
+                    var result = payload.RootElement.GetProperty("result");
+                    Assert.That(result.GetProperty("isError").GetBoolean(), Is.False);
+                    var structured = result.GetProperty("structuredContent");
+                    Assert.That(structured.GetProperty("ok").GetBoolean(), Is.True);
+                    var data = structured.GetProperty("data");
+                    Assert.That(data.GetProperty("mailboxes").GetArrayLength(), Is.EqualTo(1));
+                    cursor = data.GetProperty("nextCursor").GetString()!;
+                }
+
+                var secondRead = await SendJsonAsync(
+                    client,
+                    "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tools/call\",\"params\":{" +
+                    "\"name\":\"outlook_list_mailboxes\",\"arguments\":{" +
+                    "\"cursor\":\"" + cursor + "\"}}}",
+                    ValidAuthorization(TokenText));
+                AssertSseResponse(secondRead, expectedId: 33);
+                using (var payload = ParseSingleSsePayload(secondRead.Body))
+                {
+                    Assert.That(
+                        payload.RootElement.GetProperty("result").GetProperty("isError").GetBoolean(),
+                        Is.False);
+                }
+
+                Assert.That(gateway.ListMailboxesCallCount, Is.EqualTo(2));
+                Assert.That(gateway.LastListMailboxesRequest!.Anchor, Is.Not.Null);
+                Assert.That(
+                    gateway.LastListMailboxesRequest.Anchor!.Mailbox.StoreId,
+                    Is.EqualTo(mailbox.Mailbox.StoreId));
             }
         }
 
@@ -554,6 +641,12 @@ namespace OutlookClassicMcp.Transport.Tests
             }))
             using (var client = CreateHttpClient())
             {
+                var ownedToken = GetPrivateField<BearerToken>(server, "_bearerToken");
+                var ownedCodec = GetPrivateField<HmacCursorCodec>(server, "_cursorCodec");
+                var cursorPayload = new MailboxCursorPayload(
+                    CursorQueryHash,
+                    "Mailbox",
+                    "store-a");
                 server.Start();
                 var activeRequest = SendJsonAsync(
                     client,
@@ -565,6 +658,10 @@ namespace OutlookClassicMcp.Transport.Tests
                 var completion = server.BeginShutdown();
                 Assert.That(server.IsListening, Is.False);
                 Assert.That(completion.IsCompleted, Is.False);
+                Assert.That(
+                    ownedToken.MatchesAuthorizationHeaders(ValidTokenAuthorizationHeaders),
+                    Is.True);
+                Assert.DoesNotThrow((Action)(() => _ = ownedCodec.Encode(cursorPayload)));
                 using (var replacement = CreateServer(CreateToken(33)))
                 {
                     Assert.DoesNotThrow((Action)replacement.Start);
@@ -585,6 +682,10 @@ namespace OutlookClassicMcp.Transport.Tests
 
                 await completion;
                 Assert.That(server.ActiveHandlerCount, Is.Zero);
+                Assert.Throws<ObjectDisposedException>((Action)(() =>
+                    ownedToken.MatchesAuthorizationHeaders(ValidTokenAuthorizationHeaders)));
+                Assert.Throws<ObjectDisposedException>((Action)(() =>
+                    _ = ownedCodec.Encode(cursorPayload)));
             }
         }
 
@@ -815,7 +916,7 @@ namespace OutlookClassicMcp.Transport.Tests
         }
 
         [Test]
-        public async Task PinnedMcpClientInitializesPingsListsAndCallsPhaseThreeTools()
+        public async Task PinnedMcpClientInitializesPingsListsAndCallsPhaseFourTools()
         {
             using (var server = CreateServer(TokenText))
             using (var httpClient = CreateHttpClient())
@@ -854,7 +955,7 @@ namespace OutlookClassicMcp.Transport.Tests
                             new ListToolsRequestParams(),
                             cancellation.Token);
                         Assert.That(tools.Tools.Select(tool => tool.Name),
-                            Is.EqualTo(PhaseThreeToolNames));
+                            Is.EqualTo(PhaseFourToolNames));
 
                         var status = await client.CallToolAsync(
                             new CallToolRequestParams
@@ -921,6 +1022,33 @@ namespace OutlookClassicMcp.Transport.Tests
         {
             Assert.That(BearerToken.TryCreate(encodedToken, out var token), Is.True);
             return new LoopbackHttpServer(token, statusProvider, outlookGateway);
+        }
+
+        private static OutlookMailboxSummary CreateLoopbackMailbox()
+        {
+            var mailbox = new MailboxRef("loopback-store");
+            return new OutlookMailboxSummary(
+                mailbox,
+                "Loopback mailbox",
+                OutlookStoreType.PrimaryExchangeMailbox,
+                new OutlookStoreCapabilities(true, false, true),
+                new OutlookStandardFolderReferences(
+                    new FolderRef(mailbox.StoreId, "loopback-inbox"),
+                    null,
+                    null,
+                    null,
+                    null));
+        }
+
+        private static T GetPrivateField<T>(object instance, string fieldName)
+            where T : class
+        {
+            var field = instance.GetType().GetField(
+                fieldName,
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null);
+            return (T)field!.GetValue(instance)!;
         }
 
         private static HttpClient CreateHttpClient()

@@ -11,5 +11,8 @@ namespace OutlookClassicMcp.Transport
         public const int MaximumHeaderCharacters = 16 * 1024;
         public const int MaximumHeaderValueCharacters = 8 * 1024;
         public const long MaximumRequestBodyBytes = 1024L * 1024L;
+        public const int DefaultReadPageSize = 25;
+        public const int DefaultMessageBodyCharacters = 50000;
+        public const int MaximumToolResultBytes = 1024 * 1024;
     }
 }

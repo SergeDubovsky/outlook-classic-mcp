@@ -14,6 +14,15 @@ namespace OutlookClassicMcp.Core.Outlook
         ObjectModelGuard = 7,
         StaDispatchFailed = 8,
         Internal = 9,
+        Paused = 10,
+        StoreNotFound = 11,
+        FolderNotFound = 12,
+        ItemNotFound = 13,
+        ItemMovedOrDeleted = 14,
+        UnsupportedStore = 15,
+        UnsupportedItemType = 16,
+        InvalidArgument = 17,
+        CursorStale = 18,
     }
 
     public sealed class OutlookGatewayException : Exception
@@ -50,6 +59,24 @@ namespace OutlookClassicMcp.Core.Outlook
                     return "The Outlook UI thread dispatch failed.";
                 case OutlookGatewayFailure.Internal:
                     return "The Outlook operation failed.";
+                case OutlookGatewayFailure.Paused:
+                    return "The Outlook integration is paused.";
+                case OutlookGatewayFailure.StoreNotFound:
+                    return "The mailbox store no longer exists.";
+                case OutlookGatewayFailure.FolderNotFound:
+                    return "The folder no longer exists.";
+                case OutlookGatewayFailure.ItemNotFound:
+                    return "The message no longer exists.";
+                case OutlookGatewayFailure.ItemMovedOrDeleted:
+                    return "The message was moved or deleted.";
+                case OutlookGatewayFailure.UnsupportedStore:
+                    return "The mailbox store is not supported for this operation.";
+                case OutlookGatewayFailure.UnsupportedItemType:
+                    return "The Outlook item type is not supported.";
+                case OutlookGatewayFailure.InvalidArgument:
+                    return "The request is invalid.";
+                case OutlookGatewayFailure.CursorStale:
+                    return "The continuation cursor is stale.";
                 default:
                     throw new ArgumentOutOfRangeException(nameof(failure));
             }

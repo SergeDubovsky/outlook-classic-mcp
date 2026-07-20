@@ -2,10 +2,25 @@
 
 ## Implementation plan and repository handoff
 
-Status: Phases 0-3 complete; Phase 4 not started
-Plan version: 1.1
+Status: Phases 0-3 complete; Phase 4 implemented, live acceptance paused before the final three-cycle gate
+Plan version: 1.2
 Prepared: 2026-07-14
 Target: Windows x64, Classic Outlook, one active Outlook profile, local Codex clients
+
+### Next session — weekend of 2026-07-25
+
+The 2026-07-19 session stopped at a safe Phase 4 checkpoint so Outlook remains available for normal use during the week. The bounded read implementation, automated tests, CLI smoke harness, and conditional synthetic PST seeder are present. The seeder now uses a provider-verified typed Outlook Object Model copy/move path rather than per-item saves; it created the complete 12-item pagination and 1,001-item large-folder fixtures in seconds. Final Phase 4 acceptance was deliberately not claimed.
+
+Paused host state: Outlook is stopped, port 8765 is free, temporary add-in registration is absent in both registry views, no ephemeral certificate remains, and the original/non-test Outlook profile references no fixture PST. Six PSTs remain attached only to three disposable test profiles because the final detach add-in did not start and no additional Outlook launch was permitted. Their exact profile/run-directory map is retained locally in ignored `smoke/outlook/phase4-pause.local.json`; machine-specific registration state is not committed. Do not delete those PSTs or run directories directly. Resume with the exact profile/run-directory detach workflow so Outlook removes each store before scoped file cleanup.
+
+Resume in this order without advancing to Phase 5 first:
+
+1. Reconfirm Outlook is stopped, port 8765 is free, and temporary VSTO registration/certificates are absent. Detach the three exact retained runs listed above through their matching test profiles; verify all six PST registrations and run directories are gone while every profile remains.
+2. Run the full Release build and all Core/Transport tests with full Visual Studio `MSBuild.exe`; rerun the conditional seeder compile and the static smoke-script checks.
+3. Use a pristine accountless dedicated profile. Run the optimized conditional seed twice across a normal Outlook close/reopen to prove exact 12/1,001 item reacquisition and zero template residue in default Drafts.
+4. Run `run-phase4-smoke.ps1` for the required three graceful Outlook cycles, including the native Codex call, bounded large-folder paging, partial search, cancellation recovery, COM/resource checks, privacy scan, and port release.
+5. Detach only the exact fixture PSTs, retain the dedicated profile, finalize `PHASE_4_EVIDENCE.md`, update the Phase 4 completion line below, and checkpoint/push the accepted result.
+6. Begin Phase 5 only after the Phase 4 acceptance gate is complete.
 
 Copy this file into the new repository as `docs/IMPLEMENTATION_PLAN.md`. Treat it as the implementation source of truth until a reviewed architecture decision record supersedes a section.
 

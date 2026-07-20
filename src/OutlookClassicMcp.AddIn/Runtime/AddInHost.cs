@@ -610,7 +610,8 @@ namespace OutlookClassicMcp.AddIn.Runtime
             return new OutlookStatusSnapshot(
                 _lifecycle.State.ToString().ToLowerInvariant(),
                 IsListenerActive(),
-                version);
+                version,
+                OutlookComMetrics.Capture());
         }
 
         private bool IsListenerActive()

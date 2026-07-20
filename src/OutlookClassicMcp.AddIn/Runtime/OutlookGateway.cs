@@ -8,7 +8,7 @@ using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace OutlookClassicMcp.AddIn.Runtime
 {
-    internal sealed class OutlookGateway : IOutlookGateway
+    internal sealed partial class OutlookGateway : IOutlookGateway
     {
         private const int MapiNotFound = unchecked((int)0x8004010F);
         private const int RpcCallRejected = unchecked((int)0x80010001);
@@ -80,6 +80,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 {
                     throw new OutlookGatewayException(OutlookGatewayFailure.NotReady);
                 }
+                OutlookComMetrics.RecordAcquired();
 
                 var configuredStoreCount = stores.Count;
                 var returnedStoreCount = Math.Min(
@@ -98,11 +99,13 @@ namespace OutlookClassicMcp.AddIn.Runtime
                             metadataIncomplete = true;
                             continue;
                         }
+                        OutlookComMetrics.RecordAcquired();
 
                         var result = ProbeStore(store, ref metadataIncomplete);
                         if (result != null)
                         {
                             results.Add(result);
+                            OutlookComMetrics.ObserveMaterializedItems(results.Count);
                         }
                     }
                     finally
@@ -110,6 +113,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                         if (store != null)
                         {
                             Marshal.ReleaseComObject(store);
+                            OutlookComMetrics.RecordReleased();
                         }
                     }
                 }
@@ -142,6 +146,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 if (stores != null)
                 {
                     Marshal.ReleaseComObject(stores);
+                    OutlookComMetrics.RecordReleased();
                 }
             }
         }
@@ -295,6 +300,10 @@ namespace OutlookClassicMcp.AddIn.Runtime
             try
             {
                 folder = store.GetDefaultFolder(folderKind);
+                if (folder != null)
+                {
+                    OutlookComMetrics.RecordAcquired();
+                }
                 return folder == null
                     ? OutlookFolderAvailability.Missing
                     : OutlookFolderAvailability.Available;
@@ -313,6 +322,7 @@ namespace OutlookClassicMcp.AddIn.Runtime
                 if (folder != null)
                 {
                     Marshal.ReleaseComObject(folder);
+                    OutlookComMetrics.RecordReleased();
                 }
             }
         }

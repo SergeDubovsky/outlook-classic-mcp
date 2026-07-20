@@ -104,6 +104,55 @@ namespace OutlookClassicMcp.Transport.Tests
 
             Assert.Throws<ObjectDisposedException>(
                 (Action)(() => token.MatchesAuthorizationHeaders(new[] { "Bearer " + TokenText })));
+            Assert.Throws<ObjectDisposedException>((Action)(() => token.CreateCursorCodec()));
+        }
+
+        [Test]
+        public void CursorCodecHasAnIndependentDisposableDerivedKey()
+        {
+            var token = CreateToken();
+            var codec = token.CreateCursorCodec();
+            token.Dispose();
+            try
+            {
+                var queryHash = new string('a', HmacCursorCodec.Sha256HexLength);
+                var cursor = codec.Encode(new MailboxCursorPayload(
+                    queryHash,
+                    "Mailbox",
+                    "STORE-ID"));
+
+                Assert.That(
+                    codec.TryDecode(
+                        cursor,
+                        HmacCursorKind.ListMailboxes,
+                        queryHash,
+                        out var decoded),
+                    Is.True);
+                Assert.That(decoded, Is.TypeOf<MailboxCursorPayload>());
+            }
+            finally
+            {
+                codec.Dispose();
+            }
+        }
+
+        [Test]
+        public void DisposingACursorCodecDoesNotRetireItsSourceToken()
+        {
+            using (var token = CreateToken())
+            {
+                var codec = token.CreateCursorCodec();
+                codec.Dispose();
+
+                Assert.That(
+                    token.MatchesAuthorizationHeaders(new[] { "Bearer " + TokenText }),
+                    Is.True);
+                Assert.Throws<ObjectDisposedException>((Action)(() =>
+                    codec.Encode(new MailboxCursorPayload(
+                        new string('a', HmacCursorCodec.Sha256HexLength),
+                        "Mailbox",
+                        "STORE-ID"))));
+            }
         }
 
         private static BearerToken CreateToken(string tokenText = TokenText)

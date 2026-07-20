@@ -1,6 +1,8 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using NUnit.Framework;
+using OutlookClassicMcp.Core.Outlook;
 using OutlookClassicMcp.Core.Policy;
 
 namespace OutlookClassicMcp.Transport.Tests
@@ -8,6 +10,15 @@ namespace OutlookClassicMcp.Transport.Tests
     [TestFixture]
     public sealed class OutlookStatusCatalogTests
     {
+        private static readonly string[] ReadDiagnosticPropertyNames =
+        {
+            "comAcquired",
+            "comReleased",
+            "comOutstanding",
+            "comPeak",
+            "materializedItemHighWater",
+        };
+
         [Test]
         public void DescriptorExposesOnlyTheBoundedReadOnlyStatusTool()
         {
@@ -37,6 +48,7 @@ namespace OutlookClassicMcp.Transport.Tests
             Assert.That(
                 statusData.GetProperty("version").GetProperty("maxLength").GetInt32(),
                 Is.EqualTo(OutlookStatusSnapshot.MaximumVersionLength));
+            Assert.That(statusData.TryGetProperty("readDiagnostics", out _), Is.False);
             var errorProperties = outputSchema.Value
                 .GetProperty("oneOf")[1]
                 .GetProperty("properties")
@@ -49,6 +61,36 @@ namespace OutlookClassicMcp.Transport.Tests
             var details = errorProperties.GetProperty("details");
             Assert.That(details.GetProperty("properties").EnumerateObject(), Is.Empty);
             Assert.That(details.GetProperty("additionalProperties").GetBoolean(), Is.False);
+        }
+
+        [Test]
+        public void PhaseFourDescriptorRequiresClosedReadDiagnostics()
+        {
+            var data = OutlookStatusCatalog.CreateDescriptor(includeReadDiagnostics: true)
+                .OutputSchema!.Value
+                .GetProperty("oneOf")[0]
+                .GetProperty("properties")
+                .GetProperty("data");
+            Assert.That(
+                data.GetProperty("required").EnumerateArray()
+                    .Select(value => value.GetString()),
+                Does.Contain("readDiagnostics"));
+            var diagnostics = data.GetProperty("properties").GetProperty("readDiagnostics");
+            Assert.That(diagnostics.GetProperty("type").GetString(), Is.EqualTo("object"));
+            Assert.That(diagnostics.GetProperty("additionalProperties").GetBoolean(), Is.False);
+            Assert.That(
+                diagnostics.GetProperty("properties").EnumerateObject()
+                    .Select(property => property.Name),
+                Is.EqualTo(ReadDiagnosticPropertyNames));
+            Assert.That(
+                diagnostics.GetProperty("required").EnumerateArray()
+                    .Select(value => value.GetString()),
+                Is.EqualTo(ReadDiagnosticPropertyNames));
+            foreach (var property in diagnostics.GetProperty("properties").EnumerateObject())
+            {
+                Assert.That(property.Value.GetProperty("type").GetString(), Is.EqualTo("integer"));
+                Assert.That(property.Value.GetProperty("minimum").GetInt64(), Is.Zero);
+            }
         }
 
         [Test]
@@ -74,6 +116,25 @@ namespace OutlookClassicMcp.Transport.Tests
             Assert.That(snapshot.HostState, Is.EqualTo("Online"));
             Assert.That(snapshot.ListenerReady, Is.True);
             Assert.That(snapshot.Version, Is.EqualTo("1.2.3"));
+            Assert.That(snapshot.ReadDiagnostics, Is.Not.Null);
+            Assert.That(snapshot.ReadDiagnostics.ComAcquired, Is.Zero);
+            Assert.That(snapshot.ReadDiagnostics.ComReleased, Is.Zero);
+            Assert.That(snapshot.ReadDiagnostics.ComOutstanding, Is.Zero);
+            Assert.That(snapshot.ReadDiagnostics.ComPeak, Is.Zero);
+            Assert.That(snapshot.ReadDiagnostics.MaterializedItemHighWater, Is.Zero);
+        }
+
+        [Test]
+        public void SnapshotPreservesReadDiagnostics()
+        {
+            var diagnostics = new OutlookReadDiagnosticsSnapshot(9, 7, 2, 4, 25);
+            var snapshot = new OutlookStatusSnapshot(
+                "Online",
+                listenerReady: true,
+                "1.2.3",
+                diagnostics);
+
+            Assert.That(snapshot.ReadDiagnostics, Is.SameAs(diagnostics));
         }
 
         [Test]

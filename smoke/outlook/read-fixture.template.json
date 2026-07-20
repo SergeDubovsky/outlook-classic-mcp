@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "source": "classic-outlook-ui",
+  "stores": [
+    {
+      "alias": "mailbox_store",
+      "displayName": "REPLACE_WITH_DISPOSABLE_MAILBOX_DISPLAY_NAME",
+      "storeType": "primaryExchangeMailbox",
+      "expectsInbox": true,
+      "knownMessage": {
+        "subjectMarker": "REPLACE_MAILBOX_KNOWN_SUBJECT_MARKER_01",
+        "bodyMarker": "REPLACE_MAILBOX_KNOWN_BODY_MARKER_01"
+      }
+    },
+    {
+      "alias": "pst_store",
+      "displayName": "REPLACE_WITH_DISPOSABLE_PST_DISPLAY_NAME",
+      "storeType": "nonExchange",
+      "expectsInbox": true,
+      "knownMessage": {
+        "subjectMarker": "REPLACE_PST_KNOWN_SUBJECT_MARKER_02",
+        "bodyMarker": "REPLACE_PST_KNOWN_BODY_MARKER_02"
+      }
+    }
+  ],
+  "pagination": {
+    "storeAlias": "pst_store",
+    "folderPath": [
+      "REPLACE_STATIC_PAGINATION_FOLDER_NAME"
+    ],
+    "pageSize": 4,
+    "orderedSubjectMarkers": [
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_01",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_02",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_03",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_04",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_05",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_06",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_07",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_08",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_09",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_10",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_11",
+      "REPLACE_STATIC_PAGE_SUBJECT_MARKER_12"
+    ]
+  },
+  "largeFolder": {
+    "storeAlias": "pst_store",
+    "folderPath": [
+      "REPLACE_LARGE_FOLDER_NAME"
+    ],
+    "minimumItemCount": 1001
+  },
+  "conversation": {
+    "storeAlias": "mailbox_store",
+    "folderPath": [
+      "REPLACE_CONVERSATION_FOLDER_NAME"
+    ],
+    "seedSubjectMarker": "REPLACE_CONVERSATION_SEED_MARKER_01",
+    "expectedSubjectMarkers": [
+      "REPLACE_CONVERSATION_SUBJECT_MARKER_01",
+      "REPLACE_CONVERSATION_SUBJECT_MARKER_02"
+    ]
+  },
+  "attachmentMessage": {
+    "storeAlias": "mailbox_store",
+    "folderPath": [
+      "REPLACE_ATTACHMENT_FOLDER_NAME"
+    ],
+    "subjectMarker": "REPLACE_ATTACHMENT_SUBJECT_MARKER_01",
+    "expectedAttachments": [
+      {
+        "name": "REPLACE_ATTACHMENT_FILE_NAME_01.txt",
+        "size": 0
+      },
+      {
+        "name": "REPLACE_ATTACHMENT_FILE_NAME_02.bin",
+        "size": 0
+      }
+    ]
+  },
+  "longBodyMessage": {
+    "storeAlias": "mailbox_store",
+    "folderPath": [
+      "REPLACE_LONG_BODY_FOLDER_NAME"
+    ],
+    "subjectMarker": "REPLACE_LONG_BODY_SUBJECT_MARKER_01",
+    "bodyPrefixMarker": "REPLACE_LONG_BODY_PREFIX_MARKER_01",
+    "minimumCharacterCount": 128
+  },
+  "protectedMessage": {
+    "storeAlias": "mailbox_store",
+    "folderPath": [
+      "REPLACE_PROTECTED_FOLDER_NAME"
+    ],
+    "subjectMarker": "REPLACE_PROTECTED_SUBJECT_MARKER_01"
+  }
+}

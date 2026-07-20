@@ -5,6 +5,7 @@
     <IsPackable>false</IsPackable>
     <AssemblyName>OutlookClassicMcp.Core.Tests</AssemblyName>
     <RootNamespace>OutlookClassicMcp.Core.Tests</RootNamespace>
+    <OfficePiaRoot Condition="'$(OfficePiaRoot)' == ''">$(MSBuildProgramFiles32)\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15</OfficePiaRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,11 +22,28 @@
   <ItemGroup>
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\HostLifecycle.cs" Link="AddInRuntime\HostLifecycle.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\HostLifecycleState.cs" Link="AddInRuntime\HostLifecycleState.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookComMetrics.cs" Link="AddInRuntime\OutlookComMetrics.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookReadDate.cs" Link="AddInRuntime\OutlookReadDate.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="Office, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <HintPath>$(OfficePiaRoot)\Office.dll</HintPath>
+      <Private>False</Private>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="Microsoft.Office.Interop.Outlook, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <HintPath>$(OfficePiaRoot)\Microsoft.Office.Interop.Outlook.dll</HintPath>
+      <Private>False</Private>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+    </Reference>
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\MetadataDiagnostics.cs" Link="AddInRuntime\MetadataDiagnostics.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookErrorMapper.cs" Link="AddInRuntime\OutlookErrorMapper.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookReadFilter.cs" Link="AddInRuntime\OutlookReadFilter.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookReadProjection.cs" Link="AddInRuntime\OutlookReadProjection.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookSearchMerge.cs" Link="AddInRuntime\OutlookSearchMerge.cs" />
+    <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookSearchFolderPolicy.cs" Link="AddInRuntime\OutlookSearchFolderPolicy.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookStaDispatcher.cs" Link="AddInRuntime\OutlookStaDispatcher.cs" />
     <Compile Include="..\..\src\OutlookClassicMcp.AddIn\Runtime\OutlookThreadContext.cs" Link="AddInRuntime\OutlookThreadContext.cs" />
   </ItemGroup>

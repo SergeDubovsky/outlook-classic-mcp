@@ -13,40 +13,86 @@ namespace OutlookClassicMcp.Core.Tests
     [TestFixture]
     public sealed class OutlookContractBoundaryTests
     {
-        private static readonly Type[] DtoTypes =
-        {
-            typeof(OutlookProbeSnapshot),
-            typeof(OutlookDispatcherThreadProof),
-            typeof(OutlookStoreProbe),
-            typeof(OutlookStoreCapabilities),
-            typeof(StandardFolderAvailability),
-        };
-
         [Test]
-        public void GatewayHasOneTypedCancelableProbeOperation()
+        public void GatewayHasOnlyTheReviewedTypedCancelableOperations()
         {
-            var methods = typeof(IOutlookGateway).GetMethods();
+            var methods = typeof(IOutlookGateway).GetMethods()
+                .OrderBy(method => method.Name, StringComparer.Ordinal)
+                .ToArray();
 
-            Assert.That(methods, Has.Length.EqualTo(1));
-            AssertAll(() =>
+            var expected = new[]
             {
-                Assert.That(methods[0].Name, Is.EqualTo(nameof(IOutlookGateway.ProbeAsync)));
-                Assert.That(methods[0].ReturnType, Is.EqualTo(typeof(Task<OutlookProbeSnapshot>)));
-                Assert.That(
-                    methods[0].GetParameters().Select(parameter => parameter.ParameterType),
-                    Is.EqualTo(new[] { typeof(CancellationToken) }));
-            });
+                new GatewaySignature(
+                    nameof(IOutlookGateway.GetConversationAsync),
+                    typeof(Task<OutlookMessagePage>),
+                    typeof(OutlookGetConversationRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.GetMessageAsync),
+                    typeof(Task<OutlookMessageDetail>),
+                    typeof(OutlookGetMessageRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.ListAttachmentsAsync),
+                    typeof(Task<OutlookAttachmentPage>),
+                    typeof(OutlookListAttachmentsRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.ListFoldersAsync),
+                    typeof(Task<OutlookFolderPage>),
+                    typeof(OutlookListFoldersRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.ListMailboxesAsync),
+                    typeof(Task<OutlookMailboxPage>),
+                    typeof(OutlookListMailboxesRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.ListMessagesAsync),
+                    typeof(Task<OutlookMessagePage>),
+                    typeof(OutlookListMessagesRequest)),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.ProbeAsync),
+                    typeof(Task<OutlookProbeSnapshot>),
+                    null),
+                new GatewaySignature(
+                    nameof(IOutlookGateway.SearchMessagesAsync),
+                    typeof(Task<OutlookMessagePage>),
+                    typeof(OutlookSearchMessagesRequest)),
+            };
+
+            Assert.That(methods, Has.Length.EqualTo(expected.Length));
+            for (var index = 0; index < expected.Length; index++)
+            {
+                var method = methods[index];
+                var signature = expected[index];
+                AssertAll(() =>
+                {
+                    Assert.That(method.Name, Is.EqualTo(signature.Name));
+                    Assert.That(method.ReturnType, Is.EqualTo(signature.ReturnType));
+                    var parameterTypes = method.GetParameters()
+                        .Select(parameter => parameter.ParameterType)
+                        .ToArray();
+                    var expectedParameterTypes = signature.RequestType == null
+                        ? new[] { typeof(CancellationToken) }
+                        : new[] { signature.RequestType, typeof(CancellationToken) };
+                    Assert.That(parameterTypes, Is.EqualTo(expectedParameterTypes));
+                });
+            }
         }
 
         [Test]
-        public void ProbeDtosAreSealedAndExposeNoPublicSetters()
+        public void OutlookContractClassesAreSealedAndExposeNoPublicSetters()
         {
-            foreach (var dtoType in DtoTypes)
+            var contractClasses = typeof(IOutlookGateway).Assembly
+                .GetExportedTypes()
+                .Where(type =>
+                    type.IsClass &&
+                    string.Equals(type.Namespace, typeof(IOutlookGateway).Namespace, StringComparison.Ordinal))
+                .ToArray();
+
+            foreach (var dtoType in contractClasses)
             {
                 Assert.That(dtoType.IsSealed, Is.True, dtoType.FullName);
 
                 var writableProperties = dtoType
-                    .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                    .GetProperties(
+                        BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public)
                     .Where(property => property.SetMethod != null && property.SetMethod.IsPublic)
                     .Select(property => property.Name)
                     .ToArray();
@@ -108,7 +154,30 @@ namespace OutlookClassicMcp.Core.Tests
                         nameof(OutlookProbeWarning.StoreMetadataIncomplete),
                         nameof(OutlookProbeWarning.StoreLimitReached),
                     }));
+                Assert.That(
+                    typeof(OutlookBodyFormat).GetEnumNames(),
+                    Is.EqualTo(new[]
+                    {
+                        nameof(OutlookBodyFormat.PlainText),
+                        nameof(OutlookBodyFormat.Html),
+                    }));
             });
+        }
+
+        private sealed class GatewaySignature
+        {
+            public GatewaySignature(string name, Type returnType, Type? requestType)
+            {
+                Name = name;
+                ReturnType = returnType;
+                RequestType = requestType;
+            }
+
+            public string Name { get; }
+
+            public Type ReturnType { get; }
+
+            public Type? RequestType { get; }
         }
 
         private static void InspectContractType(

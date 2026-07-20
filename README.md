@@ -2,7 +2,7 @@
 
 An open-source, brokerless VSTO add-in that exposes the stores in an active Classic Outlook profile through an authenticated local Model Context Protocol endpoint.
 
-Phases 0 through 3 are complete. The authenticated MCP listener, mailbox-free status surface, and bounded Outlook store probe have passed automated, live Outlook, and live Codex acceptance. Message-reading and write tools remain unavailable.
+Phases 0 through 3 are complete. Phase 4 bounded read-only mail access is implemented and its final Release build and automated tests pass, but live Outlook/Codex acceptance is paused before the three-cycle gate. The current surface contains nine read-only tools; draft, mutation, attachment-export, delete, and send tools remain unavailable.
 
 ## Security boundary
 
@@ -28,7 +28,7 @@ The production system uses three assemblies in one `OUTLOOK.EXE` process:
 
 There is no service, background broker, Graph, EWS, IMAP, or connector fallback.
 
-The pinned `ModelContextProtocol.Core` 1.4.1 SDK runs in stateless Streamable HTTP mode. The implemented protocol surface is initialization, the initialized notification, ping, tool discovery, and calls to exactly two tools: `outlook_status` and `outlook_probe`. Status returns bounded managed host state. Probe dispatches synchronously onto the captured Outlook UI STA and returns bounded Outlook version, profile, store capability, and standard-folder availability metadata as immutable managed data. It does not read messages, bodies, attachments, or store identifiers.
+The pinned `ModelContextProtocol.Core` 1.4.1 SDK runs in stateless Streamable HTTP mode. The implemented protocol surface is initialization, the initialized notification, ping, tool discovery, and calls to exactly nine tools, in order: `outlook_status`, `outlook_probe`, `outlook_list_mailboxes`, `outlook_list_folders`, `outlook_list_messages`, `outlook_search_messages`, `outlook_get_message`, `outlook_get_conversation`, and `outlook_list_attachments`. Status returns bounded managed host state and non-content read diagnostics. Probe returns bounded Outlook and store metadata. The seven Phase 4 tools use store-qualified opaque locators, bounded typed inputs and results, and authenticated query-bound continuation cursors. Message bodies are available only from `outlook_get_message`; attachment content is never exported.
 
 ## Prerequisites
 
@@ -56,7 +56,7 @@ Routine builds are isolated: they refuse to overwrite an existing same-name VSTO
 
 The completed Phase 1 lifecycle acceptance is preserved in [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md). It is no longer a current runnable gate: the Phase 2 add-in always attempts authenticated listener startup, so Phase 1 mode in the historical lifecycle runner and verifier is explicitly retired.
 
-Prepare an independent store inventory as described in [the Phase 3 smoke instructions](smoke/outlook/README.md), then run the current live gate against a dedicated Outlook profile with:
+The completed Phase 3 live gate can be reproduced against a dedicated Outlook profile after preparing an independent store inventory as described in [the Phase 3 smoke instructions](smoke/outlook/README.md):
 
 ```powershell
 .\tools\run-phase3-smoke.ps1 `
@@ -69,6 +69,24 @@ Provision the current-user token first, save work, and close Outlook gracefully 
 The gate checks the unauthenticated failure, initialize/initialized, ping, exact two-tool discovery, status, twenty sequential probes, four concurrent probes, one native Codex probe, post-restart probes, independent store-inventory agreement, UI-STA execution, Outlook responsiveness, and clean port release. Only the first probe after each listener start may retry an exact metadata-incomplete partial result, with at most five attempts and a 30-second total deadline. Every later probe is single-shot and fail-closed.
 
 The final three-cycle Outlook and Codex acceptance run passed on 2026-07-19. See [Phase 3 evidence](docs/PHASE_3_EVIDENCE.md) for the recorded results.
+
+The current Phase 4 gate uses the dedicated synthetic fixture documented in [the Phase 4 smoke instructions](smoke/outlook/PHASE_4_README.md). The conditional workflow creates an accountless test profile with its real bootstrap Inbox plus two named-folder fixture PST stores:
+
+```powershell
+.\tools\seed-phase4-fixture.ps1 -Action Seed -Profile OutlookMcpTest
+.\tools\run-phase4-smoke.ps1 `
+    -Profile OutlookMcpTest `
+    -ExpectedStoreInventoryPath '<generated store-inventory.local.json>' `
+    -ReadFixturePath '<generated read-fixture.local.json>'
+.\tools\seed-phase4-fixture.ps1 `
+    -Action Detach `
+    -Profile OutlookMcpTest `
+    -RunDirectory '<same secure run directory>'
+```
+
+The runner builds and tests with CLI tooling, exercises all nine tools over three graceful Outlook cycles, makes one privacy-bounded native Codex mailbox-list call, and retains only aggregate non-content evidence. Do not treat Phase 4 as accepted until the pending live section in [Phase 4 evidence](docs/PHASE_4_EVIDENCE.md) is completed.
+
+The conditional detach action removes the two fixture PSTs and exact run-directory artifacts only. It deliberately retains the dedicated Outlook profile, its bootstrap store, and the synthetic bootstrap-Inbox message; do not reuse that profile for personal or production mail.
 
 ## Codex development configuration
 
@@ -86,7 +104,7 @@ After reviewing the security boundary above, generate or retain a 256-bit token 
 
 Restart Outlook and Codex whenever the token is installed, rotated, or cleared, then rerun `-Action Validate`. `-Action Rotate` replaces the current-user token; only newly started Outlook and Codex processes inherit the replacement. The committed `.codex/config.toml` is repository-scoped, uses the exact endpoint and `OUTLOOK_MCP_TOKEN`, and is loaded only when this checkout is trusted. Global user registration remains intentionally deferred.
 
-The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_probe` exactly once against a running Outlook instance. A deterministic validator accepted its native structured result without retaining profile or store labels.
+The Phase 3 live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_probe` exactly once against a running Outlook instance. A deterministic validator accepted its native structured result without retaining profile or store labels. Phase 4 instead permits exactly one native `outlook_list_mailboxes` call and retains only its aggregate count after privacy validation.
 
 ## Documentation
 
@@ -99,6 +117,7 @@ The live acceptance gate used `codex-cli` 0.144.6 to invoke `outlook_probe` exac
 - [Phase 1 evidence](docs/PHASE_1_EVIDENCE.md)
 - [Phase 2 evidence](docs/PHASE_2_EVIDENCE.md)
 - [Phase 3 evidence](docs/PHASE_3_EVIDENCE.md)
+- [Phase 4 evidence](docs/PHASE_4_EVIDENCE.md)
 - [Dependency licenses](docs/DEPENDENCY_LICENSES.md)
 - [Security policy](SECURITY.md)
 

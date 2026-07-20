@@ -246,6 +246,74 @@ namespace OutlookClassicMcp.AddIn.Runtime
             return workItem.Task;
         }
 
+        public Task<TResult> InvokeWithContextAsync<TContext, TState, TResult>(
+            TState state,
+            Func<TContext, TState, CancellationToken, TResult> operation,
+            CancellationToken cancellationToken)
+            where TContext : class
+        {
+            if (operation == null)
+            {
+                throw new ArgumentNullException(nameof(operation));
+            }
+
+            if (operation.Target != null)
+            {
+                throw new ArgumentException(
+                    "Context-aware Outlook operations must be static.",
+                    nameof(operation));
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled<TResult>(cancellationToken);
+            }
+
+            if (!(_ownerContext is TContext))
+            {
+                return Task.FromException<TResult>(new InvalidOperationException("HOST_UNAVAILABLE"));
+            }
+
+            ContextStateDispatchWorkItem<TContext, TState, TResult> workItem;
+            var scheduled = false;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_STOPPING"));
+                }
+
+                if (!_wakeupAvailable)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_UNAVAILABLE"));
+                }
+
+                if (!_accepting)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_STOPPING"));
+                }
+
+                if (_queue.Count + (_active ? 1 : 0) >= _capacity)
+                {
+                    return Task.FromException<TResult>(new InvalidOperationException("HOST_BUSY"));
+                }
+
+                workItem = new ContextStateDispatchWorkItem<TContext, TState, TResult>(
+                    state,
+                    operation,
+                    cancellationToken);
+                _queue.Enqueue(workItem);
+                scheduled = TryScheduleDrainUnderLock();
+            }
+
+            if (!scheduled)
+            {
+                FailDrain(null);
+            }
+
+            return workItem.Task;
+        }
+
         public void AssertOutlookThread()
         {
             var current = OutlookThreadContext.Capture();
@@ -765,6 +833,121 @@ namespace OutlookClassicMcp.AddIn.Runtime
                     }
 
                     _result = _operation(typedContext);
+                }
+                catch (Exception exception)
+                {
+                    _exception = exception;
+                }
+                finally
+                {
+                    Volatile.Write(ref _state, Invoked);
+                }
+            }
+
+            public void Complete()
+            {
+                var state = Volatile.Read(ref _state);
+                if (state == Canceled)
+                {
+                    Interlocked.CompareExchange(ref _state, Terminal, Canceled);
+                }
+                else if (Interlocked.CompareExchange(ref _state, Terminal, Invoked) == Invoked)
+                {
+                    if (_exception != null)
+                    {
+                        _completion.TrySetException(_exception);
+                    }
+                    else
+                    {
+                        _completion.TrySetResult(_result);
+                    }
+                }
+
+                _cancellationRegistration.Dispose();
+            }
+
+            public void Fail(Exception exception)
+            {
+                while (true)
+                {
+                    var state = Volatile.Read(ref _state);
+                    if (state == Terminal)
+                    {
+                        break;
+                    }
+
+                    if (Interlocked.CompareExchange(ref _state, Terminal, state) != state)
+                    {
+                        continue;
+                    }
+
+                    if (state != Canceled)
+                    {
+                        _completion.TrySetException(exception);
+                    }
+
+                    break;
+                }
+
+                _cancellationRegistration.Dispose();
+            }
+
+            private void CancelQueuedWork()
+            {
+                if (Interlocked.CompareExchange(ref _state, Canceled, Queued) == Queued)
+                {
+                    _completion.TrySetCanceled(_cancellationToken);
+                }
+            }
+        }
+
+        private sealed class ContextStateDispatchWorkItem<TContext, TState, TResult> : IDispatchWorkItem
+            where TContext : class
+        {
+            private const int Queued = 0;
+            private const int Canceled = 1;
+            private const int Running = 2;
+            private const int Invoked = 3;
+            private const int Terminal = 4;
+            private readonly CancellationToken _cancellationToken;
+            private readonly CancellationTokenRegistration _cancellationRegistration;
+            private readonly TaskCompletionSource<TResult> _completion =
+                new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly Func<TContext, TState, CancellationToken, TResult> _operation;
+            private readonly TState _operationState;
+            private Exception? _exception;
+            private TResult _result = default!;
+            private int _state = Queued;
+
+            public ContextStateDispatchWorkItem(
+                TState operationState,
+                Func<TContext, TState, CancellationToken, TResult> operation,
+                CancellationToken cancellationToken)
+            {
+                _operationState = operationState;
+                _operation = operation;
+                _cancellationToken = cancellationToken;
+                _cancellationRegistration = cancellationToken.Register(CancelQueuedWork);
+            }
+
+            public Task<TResult> Task => _completion.Task;
+
+            public void Invoke(object? ownerContext)
+            {
+                if (Interlocked.CompareExchange(ref _state, Running, Queued) != Queued)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (!(ownerContext is TContext typedContext))
+                    {
+                        throw new InvalidOperationException("HOST_UNAVAILABLE");
+                    }
+
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    _result = _operation(typedContext, _operationState, _cancellationToken);
                 }
                 catch (Exception exception)
                 {

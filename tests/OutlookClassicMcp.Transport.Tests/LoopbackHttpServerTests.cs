@@ -8,6 +8,8 @@ namespace OutlookClassicMcp.Transport.Tests
     public sealed class LoopbackHttpServerTests
     {
         private const string TokenText = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+        private static readonly string[] ValidAuthorizationHeaders =
+            { "Bearer " + TokenText };
 
         [Test]
         public void EndpointIsTheExactCanonicalLoopbackPrefix()
@@ -61,6 +63,24 @@ namespace OutlookClassicMcp.Transport.Tests
                         new FakeOutlookGateway(),
                         toolDeadline: TimeSpan.FromSeconds(2),
                         handlerDeadline: TimeSpan.FromSeconds(2))));
+            }
+        }
+
+        [Test]
+        public void ConstructorFailureLeavesCallerTokenUsable()
+        {
+            Assert.That(BearerToken.TryCreate(TokenText, out var token), Is.True);
+            using (token)
+            {
+                var exception = Assert.Throws<ArgumentNullException>((Action)(() =>
+                    _ = new LoopbackHttpServer(
+                        token,
+                        null!,
+                        new FakeOutlookGateway())));
+                Assert.That(exception!.ParamName, Is.EqualTo("statusProvider"));
+                Assert.That(
+                    token.MatchesAuthorizationHeaders(ValidAuthorizationHeaders),
+                    Is.True);
             }
         }
 

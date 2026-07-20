@@ -7,12 +7,22 @@ namespace OutlookClassicMcp.AddIn
     public partial class ThisAddIn
     {
         private AddInHost? _host;
+#if OUTLOOK_MCP_SMOKE_SEEDER
+        private Phase4FixtureSeeder? _fixtureSeeder;
+#endif
 
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
             var started = Stopwatch.GetTimestamp();
             try
             {
+#if OUTLOOK_MCP_SMOKE_SEEDER
+                if (Phase4FixtureSeeder.TryStart(Application, out var fixtureSeeder))
+                {
+                    _fixtureSeeder = fixtureSeeder;
+                    return;
+                }
+#endif
                 var host = new AddInHost(Application);
                 _host = host;
                 host.Start(started);
@@ -25,6 +35,9 @@ namespace OutlookClassicMcp.AddIn
 
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
         {
+#if OUTLOOK_MCP_SMOKE_SEEDER
+            _fixtureSeeder?.Dispose();
+#endif
             _ = _host?.BeginShutdown();
         }
 

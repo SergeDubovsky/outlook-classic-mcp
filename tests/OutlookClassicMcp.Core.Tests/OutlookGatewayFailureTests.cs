@@ -18,6 +18,15 @@ namespace OutlookClassicMcp.Core.Tests
         [TestCase(OutlookGatewayFailure.ObjectModelGuard, "Outlook blocked the operation.")]
         [TestCase(OutlookGatewayFailure.StaDispatchFailed, "The Outlook UI thread dispatch failed.")]
         [TestCase(OutlookGatewayFailure.Internal, "The Outlook operation failed.")]
+        [TestCase(OutlookGatewayFailure.Paused, "The Outlook integration is paused.")]
+        [TestCase(OutlookGatewayFailure.StoreNotFound, "The mailbox store no longer exists.")]
+        [TestCase(OutlookGatewayFailure.FolderNotFound, "The folder no longer exists.")]
+        [TestCase(OutlookGatewayFailure.ItemNotFound, "The message no longer exists.")]
+        [TestCase(OutlookGatewayFailure.ItemMovedOrDeleted, "The message was moved or deleted.")]
+        [TestCase(OutlookGatewayFailure.UnsupportedStore, "The mailbox store is not supported for this operation.")]
+        [TestCase(OutlookGatewayFailure.UnsupportedItemType, "The Outlook item type is not supported.")]
+        [TestCase(OutlookGatewayFailure.InvalidArgument, "The request is invalid.")]
+        [TestCase(OutlookGatewayFailure.CursorStale, "The continuation cursor is stale.")]
         public void FailureHasFixedSafeMessage(OutlookGatewayFailure failure, string expectedMessage)
         {
             var exception = new OutlookGatewayException(failure);
@@ -68,6 +77,15 @@ namespace OutlookClassicMcp.Core.Tests
                     nameof(OutlookGatewayFailure.ObjectModelGuard),
                     nameof(OutlookGatewayFailure.StaDispatchFailed),
                     nameof(OutlookGatewayFailure.Internal),
+                    nameof(OutlookGatewayFailure.Paused),
+                    nameof(OutlookGatewayFailure.StoreNotFound),
+                    nameof(OutlookGatewayFailure.FolderNotFound),
+                    nameof(OutlookGatewayFailure.ItemNotFound),
+                    nameof(OutlookGatewayFailure.ItemMovedOrDeleted),
+                    nameof(OutlookGatewayFailure.UnsupportedStore),
+                    nameof(OutlookGatewayFailure.UnsupportedItemType),
+                    nameof(OutlookGatewayFailure.InvalidArgument),
+                    nameof(OutlookGatewayFailure.CursorStale),
                 }));
         }
 
